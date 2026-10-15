@@ -1,5 +1,31 @@
 @import 'tailwindcss';
 
+/*
+ * Palette: violet + pink on deep indigo-black.
+ * The components use Tailwind's slate / cyan / blue names, so re-pointing the tokens
+ * here recolours the whole app from one place:
+ *   slate -> indigo-tinted darks,  cyan -> violet (primary accent),  blue -> pink (planned / secondary).
+ * emerald (up / buy) and rose (down / sell) are kept on purpose: green and red carry meaning in finance.
+ */
+@theme {
+  --color-slate-200: #ebe6fb;
+  --color-slate-300: #d0c8ef;
+  --color-slate-400: #a99fd0;
+  --color-slate-500: #8479ad;
+  --color-slate-600: #625888;
+  --color-slate-700: #41376a;
+  --color-slate-800: #2b2249;
+  --color-slate-900: #191031;
+  --color-slate-950: #0d0820;
+
+  --color-cyan-300: #d9c7ff;
+  --color-cyan-400: #b793ff;
+  --color-cyan-500: #8b5cf6;
+
+  --color-blue-400: #f472b6;
+  --color-blue-500: #ec4899;
+}
+
 @keyframes trace-glow {
   0%, 100% { opacity: 0.55; }
   50% { opacity: 1; }
@@ -9,6 +35,7 @@
   color-scheme: dark;
   font-family: Inter, ui-sans-serif, system-ui, sans-serif;
   background: var(--color-slate-950);
+  scroll-padding-top: 6rem;
 }
 
 * {
@@ -20,7 +47,8 @@ body {
   min-width: 320px;
   min-height: 100vh;
   background:
-    radial-gradient(circle at 50% -20%, color-mix(in srgb, var(--color-cyan-500) 8%, transparent), transparent 36%),
+    radial-gradient(circle at 15% -10%, color-mix(in srgb, var(--color-cyan-500) 14%, transparent), transparent 40%),
+    radial-gradient(circle at 90% 0%, color-mix(in srgb, var(--color-blue-500) 9%, transparent), transparent 38%),
     var(--color-slate-950);
 }
 
@@ -37,21 +65,64 @@ body::before {
   mask-image: linear-gradient(to bottom, black, transparent 65%);
 }
 
-[role="button"]:focus-visible {
+button:focus-visible,
+input:focus-visible {
   outline: 2px solid var(--color-cyan-400);
   outline-offset: 2px;
 }
 
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: var(--color-slate-950); }
+::-webkit-scrollbar-thumb { border-radius: 999px; background: var(--color-slate-700); }
+
+/* ---------- scroll motion ---------- */
+
+/* Reveal: panels rise in once, the first time they enter the viewport. */
+.reveal {
+  opacity: 0;
+  transform: translateY(32px) scale(0.985);
+  transition: opacity 0.8s cubic-bezier(0.2, 0.7, 0.2, 1), transform 0.8s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+.reveal-in {
+  opacity: 1;
+  transform: none;
 }
 
-::-webkit-scrollbar-track {
-  background: var(--color-slate-950);
+/* Reading-progress bar and drifting colour blobs, driven by the page scroll (pure CSS). */
+.scroll-progress {
+  position: fixed;
+  inset: 0 0 auto 0;
+  z-index: 60;
+  height: 3px;
+  transform: scaleX(0);
+  transform-origin: 0 50%;
+  background: linear-gradient(90deg, var(--color-cyan-500), var(--color-blue-400));
 }
 
-::-webkit-scrollbar-thumb {
-  border-radius: 999px;
-  background: var(--color-slate-700);
+.bg-blob {
+  position: fixed;
+  z-index: -10;
+  width: 38rem;
+  height: 38rem;
+  border-radius: 50%;
+  filter: blur(110px);
+  opacity: 0.16;
+  pointer-events: none;
+}
+.blob-a { left: -12rem; top: 8rem; background: var(--color-cyan-500); }
+.blob-b { right: -14rem; top: 34rem; background: var(--color-blue-500); }
+
+@supports (animation-timeline: scroll()) {
+  .scroll-progress { animation: progress-grow linear both; animation-timeline: scroll(root); }
+  .blob-a { animation: drift-up linear both; animation-timeline: scroll(root); }
+  .blob-b { animation: drift-down linear both; animation-timeline: scroll(root); }
+}
+@keyframes progress-grow { to { transform: scaleX(1); } }
+@keyframes drift-up { to { transform: translateY(-60vh); } }
+@keyframes drift-down { to { transform: translateY(40vh); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal { opacity: 1; transform: none; transition: none; }
+  .scroll-progress, .blob-a, .blob-b { animation: none !important; }
+  html { scroll-behavior: auto; }
 }
