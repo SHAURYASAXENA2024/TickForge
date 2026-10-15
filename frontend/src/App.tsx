@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { sp500 } from "./sp500";
-import { getStockSnapshot, type StockSnapshot } from "./stockApi";
+import { getStockSnapshot, StockApiError, type StockSnapshot } from "./stockApi";
+import { TELEMETRY_URL, useTelemetry, type BookLevel } from "./telemetry";
 
 type IconName =
   | "activity"
@@ -17,6 +18,8 @@ type IconName =
   | "server"
   | "stop"
   | "traders";
+
+type RunState = "closed" | "running" | "paused" | "stopped";
 
 const paths: Record<IconName, React.ReactNode> = {
   activity: <><path d="M3 12h4l2-7 4 14 2-7h6" /></>,
@@ -57,27 +60,39 @@ function Action({
   disabled?: boolean;
   onClick: () => void;
 }) {
-  const handleKey = (event: React.KeyboardEvent) => {
-    if (!disabled && (event.key === "Enter" || event.key === " ")) onClick();
-  };
   return (
-    <div
-      role="button"
-      tabIndex={disabled ? -1 : 0}
-      aria-disabled={disabled}
-      onClick={disabled ? undefined : onClick}
-      onKeyDown={handleKey}
-      className={`flex cursor-pointer items-center gap-1.5 rounded-md border px-3 py-2 text-xs font-semibold transition ${
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className={`flex items-center gap-1.5 rounded-md border px-3 py-2 text-xs font-semibold transition focus-visible:outline-2 focus-visible:outline-cyan-400 ${
         active
           ? "border-emerald-400 bg-emerald-400 text-slate-950 shadow-lg shadow-emerald-950"
           : disabled
             ? "cursor-not-allowed border-slate-800 bg-slate-900 text-slate-600"
-            : "border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-500 hover:bg-slate-800 hover:text-white"
+            : "cursor-pointer border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-500 hover:bg-slate-800 hover:text-white"
       }`}
     >
       <Icon name={icon} size="sm" />
       {label}
-    </div>
+    </button>
+  );
+}
+
+const badgeStyles = {
+  live: "border-emerald-500/30 bg-emerald-500/10 text-emerald-400",
+  simulated: "border-amber-500/30 bg-amber-500/10 text-amber-400",
+  sample: "border-slate-600 bg-slate-800 text-slate-400",
+  planned: "border-blue-500/30 bg-blue-500/10 text-blue-400",
+} as const;
+
+const badgeLabels = { live: "LIVE", simulated: "SIMULATED", sample: "SAMPLE DATA", planned: "PLANNED" } as const;
+
+function Badge({ kind, label }: { kind: keyof typeof badgeStyles; label?: string }) {
+  return (
+    <span className={`rounded border px-1.5 py-1 font-mono text-[9px] font-bold tracking-wider ${badgeStyles[kind]}`}>
+      {label ?? badgeLabels[kind]}
+    </span>
   );
 }
 
@@ -98,7 +113,7 @@ function Panel({
 }) {
   return (
     <section className={`overflow-hidden rounded-xl border border-slate-800 bg-slate-900/70 shadow-xl shadow-black/10 ${className}`}>
-      <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
+      <div className="flex items-center justify-between gap-2 border-b border-slate-800 px-4 py-3">
         <div className="flex items-center gap-3">
           <div className="grid size-8 place-items-center rounded-lg border border-slate-700 bg-slate-800 text-cyan-400">
             <Icon name={icon} />
@@ -115,175 +130,288 @@ function Panel({
   );
 }
 
+const fmtTime = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+function fmtUs(us: number): string {
+  if (us >= 1_000_000) return `${(us / 1_000_000).toFixed(1)} s`;
+  if (us >= 1000) return `${(us / 1000).toFixed(us >= 10_000 ? 0 : 1)} ms`;
+  return `${us < 10 ? us.toFixed(1) : us.toFixed(0)} µs`;
+}
+
+const fmtInt = (n: number) => Math.round(n).toLocaleString();
+
+type ChartMode = "line" | "candles";
+
 function PriceChart({ snapshot }: { snapshot: StockSnapshot }) {
+  const [mode, setMode] = useState<ChartMode>("line");
+  const [hover, setHover] = useState<{ index: number; frac: number } | null>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
+
   const points = snapshot.history;
-  const closes = points.map((point) => point.close);
-  const minimum = Math.min(...closes);
-  const maximum = Math.max(...closes);
-  const range = maximum - minimum || 1;
+  const n = points.length;
   const isPositive = snapshot.change >= 0;
-  const linePoints = points
-    .map((point, index) => {
-      const x = points.length === 1 ? 50 : (index / (points.length - 1)) * 100;
-      const y = 92 - ((point.close - minimum) / range) * 82;
-      return `${x},${y}`;
-    })
-    .join(" ");
+  const accent = isPositive ? "var(--color-emerald-400)" : "var(--color-rose-400)";
+
+  const minimum = mode === "candles" ? Math.min(...points.map((p) => p.low)) : Math.min(...points.map((p) => p.close));
+  const maximum = mode === "candles" ? Math.max(...points.map((p) => p.high)) : Math.max(...points.map((p) => p.close));
+  const range = maximum - minimum || 1;
+  const yOf = (value: number) => 92 - ((value - minimum) / range) * 82;
+
+  const xLine = (index: number) => (n === 1 ? 50 : (index / (n - 1)) * 100);
+  const xCandle = (index: number) => ((index + 0.5) / n) * 100;
+
+  const linePoints = points.map((p, i) => `${xLine(i)},${yOf(p.close)}`).join(" ");
   const areaPoints = `0,100 ${linePoints} 100,100`;
-  const firstTime = points[0] ? new Date(points[0].timestamp) : null;
-  const lastTime = points.at(-1) ? new Date(points.at(-1)!.timestamp) : null;
+  const firstTime = points[0] ? fmtTime(points[0].timestamp) : "";
+  const lastTime = points[n - 1] ? fmtTime(points[n - 1].timestamp) : "";
+
+  // The plot area is inset 12px on each side inside the box (inset-x-3).
+  const onPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const box = boxRef.current;
+    if (!box || n === 0) return;
+    const rect = box.getBoundingClientRect();
+    const inner = rect.width - 24;
+    if (inner <= 0) return;
+    const frac = Math.min(1, Math.max(0, (event.clientX - rect.left - 12) / inner));
+    const index = mode === "candles" ? Math.min(n - 1, Math.floor(frac * n)) : Math.round(frac * (n - 1));
+    setHover({ index, frac: mode === "candles" ? (index + 0.5) / n : n === 1 ? 0.5 : index / (n - 1) });
+  };
+
+  const hovered = hover && points[hover.index] ? points[hover.index] : null;
+  const lastClose = points[n - 1].close;
 
   return (
     <div>
-      <div className="relative h-64 overflow-hidden rounded-lg border border-slate-800 bg-slate-950/60">
+      <div
+        ref={boxRef}
+        onPointerMove={onPointerMove}
+        onPointerLeave={() => setHover(null)}
+        className="relative h-64 touch-pan-y overflow-hidden rounded-lg border border-slate-800 bg-slate-950/60"
+      >
         <div className="pointer-events-none absolute inset-0 grid grid-rows-4 divide-y divide-slate-800/60">
           <span /><span /><span /><span />
         </div>
-        <div className="absolute right-3 top-3 z-10 text-right font-mono">
+
+        <div className="absolute left-3 top-3 z-20 flex rounded-md border border-slate-800 bg-slate-950/80 p-0.5">
+          {(["line", "candles"] as const).map((value) => (
+            <button
+              key={value}
+              type="button"
+              aria-pressed={mode === value}
+              onClick={() => setMode(value)}
+              className={`rounded px-2 py-1 text-[9px] font-bold uppercase tracking-wider transition ${mode === value ? "bg-slate-700 text-white" : "text-slate-500 hover:text-slate-300"}`}
+            >
+              {value}
+            </button>
+          ))}
+        </div>
+
+        <div className="pointer-events-none absolute right-3 top-3 z-10 text-right font-mono">
           <div className="text-[9px] text-slate-600">SESSION HIGH</div>
           <div className="text-[10px] font-bold text-slate-400">{snapshot.currency} {maximum.toFixed(2)}</div>
         </div>
-        <svg className="absolute inset-x-3 bottom-7 top-6 h-[calc(100%-3.25rem)] w-[calc(100%-1.5rem)] overflow-visible" viewBox="0 0 100 100" preserveAspectRatio="none" aria-label={`${snapshot.symbol} intraday price chart`}>
-          <defs>
-            <linearGradient id={`price-fill-${snapshot.symbol}`} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={isPositive ? "var(--color-emerald-400)" : "var(--color-rose-400)"} stopOpacity="0.28" />
-              <stop offset="100%" stopColor={isPositive ? "var(--color-emerald-400)" : "var(--color-rose-400)"} stopOpacity="0" />
-            </linearGradient>
-          </defs>
-          <polygon points={areaPoints} fill={`url(#price-fill-${snapshot.symbol})`} />
-          <polyline points={linePoints} fill="none" stroke={isPositive ? "var(--color-emerald-400)" : "var(--color-rose-400)"} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
-          {points.length > 0 && (
-            <circle
-              cx={points.length === 1 ? 50 : 100}
-              cy={92 - ((points[points.length - 1].close - minimum) / range) * 82}
-              r="2"
-              fill={isPositive ? "var(--color-emerald-400)" : "var(--color-rose-400)"}
-              stroke="var(--color-slate-950)"
-              strokeWidth="1"
-              vectorEffect="non-scaling-stroke"
-            />
+
+        <svg className="pointer-events-none absolute inset-x-3 bottom-7 top-10 h-[calc(100%-4.25rem)] w-[calc(100%-1.5rem)] overflow-visible" viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label={`${snapshot.symbol} intraday ${mode === "candles" ? "candlestick" : "price"} chart`}>
+          {mode === "line" ? (
+            <>
+              <defs>
+                <linearGradient id={`price-fill-${snapshot.symbol}`} x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor={accent} stopOpacity="0.28" />
+                  <stop offset="100%" stopColor={accent} stopOpacity="0" />
+                </linearGradient>
+              </defs>
+              <polygon points={areaPoints} fill={`url(#price-fill-${snapshot.symbol})`} />
+              <polyline points={linePoints} fill="none" stroke={accent} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+              <circle cx={n === 1 ? 50 : 100} cy={yOf(lastClose)} r="2" fill={accent} stroke="var(--color-slate-950)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+            </>
+          ) : (
+            points.map((p, i) => {
+              const up = p.close >= p.open;
+              const color = up ? "var(--color-emerald-400)" : "var(--color-rose-400)";
+              const cx = xCandle(i);
+              const width = (100 / n) * 0.6;
+              const top = yOf(Math.max(p.open, p.close));
+              const height = Math.max(0.6, Math.abs(yOf(p.open) - yOf(p.close)));
+              return (
+                <g key={p.timestamp}>
+                  <line x1={cx} x2={cx} y1={yOf(p.high)} y2={yOf(p.low)} stroke={color} strokeWidth="1" vectorEffect="non-scaling-stroke" />
+                  <rect x={cx - width / 2} y={top} width={width} height={height} fill={color} />
+                </g>
+              );
+            })
           )}
         </svg>
-        <div className="absolute inset-x-3 bottom-2 flex justify-between font-mono text-[9px] text-slate-600">
-          <span>{firstTime?.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
-          <span>{lastTime?.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+
+        {hover && hovered && (
+          <>
+            <div className="pointer-events-none absolute bottom-7 top-10 w-px bg-slate-500/60" style={{ left: `calc(12px + (100% - 24px) * ${hover.frac})` }} />
+            <div
+              className="pointer-events-none absolute top-12 z-30 min-w-36 rounded-md border border-slate-700 bg-slate-900/95 px-2.5 py-2 font-mono text-[10px] shadow-xl"
+              style={hover.frac > 0.55 ? { right: "calc(100% - 12px - (100% - 24px) * " + hover.frac + " + 8px)" } : { left: `calc(12px + (100% - 24px) * ${hover.frac} + 8px)` }}
+            >
+              <div className="mb-1 font-bold text-slate-200">{fmtTime(hovered.timestamp)}</div>
+              <div className="grid grid-cols-[auto_1fr] gap-x-3 text-slate-400">
+                <span>O</span><span className="text-right text-slate-200">{hovered.open.toFixed(2)}</span>
+                <span>H</span><span className="text-right text-slate-200">{hovered.high.toFixed(2)}</span>
+                <span>L</span><span className="text-right text-slate-200">{hovered.low.toFixed(2)}</span>
+                <span>C</span><span className="text-right text-slate-200">{hovered.close.toFixed(2)}</span>
+                <span>Vol</span><span className="text-right text-slate-200">{hovered.volume.toLocaleString()}</span>
+              </div>
+            </div>
+          </>
+        )}
+
+        <div className="pointer-events-none absolute inset-x-3 bottom-2 flex justify-between font-mono text-[9px] text-slate-600">
+          <span>{firstTime}</span>
+          <span>{lastTime}</span>
         </div>
       </div>
       <div className="mt-2 flex items-center justify-between text-[9px] text-slate-600">
-        <span>{points.length} real OHLCV samples</span>
+        <span>{n} OHLCV samples · hover for details</span>
         <span>Range {snapshot.currency} {minimum.toFixed(2)} — {maximum.toFixed(2)}</span>
       </div>
     </div>
   );
 }
 
-const traders = [
-  { id: "VT-01", strategy: "Momentum", side: "BUY", position: "+0", dot: "bg-cyan-400" },
-  { id: "VT-02", strategy: "Mean Reversion", side: "SELL", position: "+0", dot: "bg-violet-400" },
-  { id: "VT-03", strategy: "Market Maker", side: "B / S", position: "+0", dot: "bg-amber-400" },
-  { id: "VT-04", strategy: "Random", side: "BUY", position: "+0", dot: "bg-blue-400" },
-  { id: "VT-05", strategy: "Momentum", side: "SELL", position: "+0", dot: "bg-emerald-400" },
-  { id: "VT-06", strategy: "Market Maker", side: "B / S", position: "+0", dot: "bg-rose-400" },
-];
-
+// Engine flow. The first FLOW_STAGES entries exist today; the rest are planned.
 const stages = [
-  { label: "TRADER", meta: "VT-01", icon: "traders" as IconName },
-  { label: "GATEWAY", meta: "API", icon: "server" as IconName },
-  { label: "THREAD", meta: "T-04", icon: "cpu" as IconName },
-  { label: "MPSC", meta: "QUEUE", icon: "layers" as IconName },
-  { label: "MATCHER", meta: "C++", icon: "bolt" as IconName },
-  { label: "BOOK", meta: "NIFTY", icon: "book" as IconName },
-  { label: "TRADE", meta: "EVENT", icon: "activity" as IconName },
-  { label: "WAL", meta: "RUST", icon: "database" as IconName },
-  { label: "MEMTABLE", meta: "LSM", icon: "layers" as IconName },
+  { label: "PRODUCER", meta: "THREAD", icon: "traders" as IconName, planned: false },
+  { label: "MPSC", meta: "QUEUE", icon: "layers" as IconName, planned: false },
+  { label: "MATCHER", meta: "C++", icon: "bolt" as IconName, planned: false },
+  { label: "BOOK", meta: "PRICE-TIME", icon: "book" as IconName, planned: false },
+  { label: "TRADE", meta: "EVENT", icon: "activity" as IconName, planned: false },
+  { label: "WAL", meta: "PLANNED", icon: "database" as IconName, planned: true },
+  { label: "MEMTABLE", meta: "PLANNED", icon: "layers" as IconName, planned: true },
+];
+const FLOW_STAGES = stages.filter((stage) => !stage.planned).length;
+
+const sampleTraders = [
+  { id: "VT-01", strategy: "Momentum", side: "BUY", count: "—", dot: "bg-cyan-400" },
+  { id: "VT-02", strategy: "Mean Reversion", side: "SELL", count: "—", dot: "bg-violet-400" },
+  { id: "VT-03", strategy: "Market Maker", side: "B / S", count: "—", dot: "bg-amber-400" },
+  { id: "VT-04", strategy: "Random", side: "BUY", count: "—", dot: "bg-blue-400" },
+  { id: "VT-05", strategy: "Momentum", side: "SELL", count: "—", dot: "bg-emerald-400" },
+  { id: "VT-06", strategy: "Market Maker", side: "B / S", count: "—", dot: "bg-rose-400" },
+];
+const producerDots = ["bg-cyan-400", "bg-violet-400", "bg-amber-400", "bg-blue-400"];
+
+const sampleAsks: BookLevel[] = [
+  { price: 105.1, qty: 200 },
+  { price: 105.15, qty: 250 },
+  { price: 105.2, qty: 100 },
+];
+const sampleBids: BookLevel[] = [
+  { price: 105.0, qty: 150 },
+  { price: 104.95, qty: 80 },
+  { price: 104.9, qty: 220 },
 ];
 
-const asks = [
-  ["105.20", "100", "48%"],
-  ["105.15", "250", "78%"],
-  ["105.10", "200", "62%"],
-];
-const bids = [
-  ["105.00", "150", "56%"],
-  ["104.95", "80", "38%"],
-  ["104.90", "220", "70%"],
-];
-
-const mvpCapabilities = [
-  "Market clock",
-  "Market open / close",
-  "Start / stop / reset",
-  "Virtual traders",
-  "Basic strategies",
-  "Order pipeline",
-  "Real C++ matching engine",
-  "MPSC queue",
-  "Order book",
-  "Trade visualization",
-  "WAL",
-  "MemTable",
-  "Basic SSTables",
-  "Basic metrics",
-  "Basic architecture view",
-  "CPU utilization",
+const workingToday = [
+  "Lock-free MPSC queue",
+  "Price-time order book",
+  "C++ matching thread",
+  "Live engine telemetry",
+  "Latency histogram (p50 / p99)",
+  "Start / pause / stop / reset",
+  "Manual order ticket",
+  "Live trade tape",
+  "Real market data (Yahoo)",
+  "Line + candlestick charts",
 ];
 
-const futureCapabilities = [
-  "Thread / CPU mapping",
-  "Detailed scheduler visualization",
-  "CAS contention",
-  "Order trace",
-  "Detailed LSM internals",
+const roadmap = [
+  "WAL + crash recovery",
+  "MemTable / SSTables",
   "Bloom filters / indexes",
-  "Compaction visualization",
-  "Stress testing",
-  "Crash recovery",
-  "Multi-instrument",
+  "Compaction",
+  "CAS contention counters",
+  "Thread / CPU mapping",
+  "Multi-instrument books",
   "Engine sharding",
-  "Replication",
-  "Failover",
-  "Candlestick charts",
-  "Advanced trader analytics",
+  "Replication / failover",
+  "Cross-thread order trace",
 ];
+
+const LAT_BUCKETS_SHOWN = 16;
 
 function App() {
-  const [state, setState] = useState<"closed" | "running" | "paused" | "stopped">("closed");
-  const [speed, setSpeed] = useState(10);
-  const [seconds, setSeconds] = useState(0);
+  // ---- engine link (WebSocket bridge) ----------------------------------
+  const { link, engineState, engineError, stats, trades, send } = useTelemetry();
+  const live = link === "live";
+
+  // ---- run controls ------------------------------------------------------
+  const [simState, setSimState] = useState<RunState>("closed");
+  const [speed, setSpeed] = useState<1 | 10 | 100>(10);
+  const [marketSeconds, setMarketSeconds] = useState(0);
   const [activeStage, setActiveStage] = useState(-1);
+  const state: RunState = live ? engineState : simState;
+  const online = state === "running" || state === "paused";
+
+  // ---- instruments + market data ----------------------------------------
   const [instrumentsOpen, setInstrumentsOpen] = useState(false);
   const [selectedSector, setSelectedSector] = useState("All sectors");
+  const [query, setQuery] = useState("");
   const [selectedSymbol, setSelectedSymbol] = useState("AAPL");
   const [stockSnapshot, setStockSnapshot] = useState<StockSnapshot | null>(null);
-  const [stockApiState, setStockApiState] = useState<"loading" | "online" | "error">("loading");
-  const [stockApiError, setStockApiError] = useState("");
+  const [stockApiState, setStockApiState] = useState<"loading" | "online" | "stale" | "error">("loading");
+  const [stockApiError, setStockApiError] = useState<{ kind: StockApiError["kind"]; message: string } | null>(null);
 
+  // ---- order ticket -------------------------------------------------------
+  const [ticketSide, setTicketSide] = useState<"BUY" | "SELL">("BUY");
+  const [ticketQty, setTicketQty] = useState("100");
+  const [ticketPrice, setTicketPrice] = useState("150.00");
+  const [ticketMsg, setTicketMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  // Simulated market clock: advances by `speed` market-seconds per real second.
+  // It accumulates, so changing speed never makes the clock jump.
   useEffect(() => {
     if (state !== "running") return;
-    const timer = window.setInterval(() => {
-      setSeconds((value) => value + 1);
-      setActiveStage((value) => (value + 1) % stages.length);
-    }, Math.max(140, 1100 / speed));
+    const timer = window.setInterval(() => setMarketSeconds((value) => value + speed * 0.25), 250);
     return () => window.clearInterval(timer);
   }, [state, speed]);
 
+  // Pipeline highlight animation (illustrative; cycles through the stages that exist today).
+  useEffect(() => {
+    if (state !== "running") return;
+    const timer = window.setInterval(() => setActiveStage((value) => (value + 1) % FLOW_STAGES), Math.max(140, 1100 / speed));
+    return () => window.clearInterval(timer);
+  }, [state, speed]);
+
+  // When the bridge connects, tell the engine which speed the UI is showing.
+  useEffect(() => {
+    if (live) send({ cmd: "speed", value: speed });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [live]);
+
+  // Market data: clear stale data on symbol change, keep last good data on later failures.
   useEffect(() => {
     let controller: AbortController | null = null;
+    let hasData = false;
+    setStockSnapshot(null);
+    setStockApiState("loading");
+    setStockApiError(null);
 
     const loadStock = async () => {
+      if (document.hidden && hasData) return;
       controller?.abort();
       controller = new AbortController();
-      setStockApiState((current) => current === "online" ? current : "loading");
       try {
         const snapshot = await getStockSnapshot(selectedSymbol, controller.signal);
+        hasData = true;
         setStockSnapshot(snapshot);
         setStockApiState("online");
-        setStockApiError("");
+        setStockApiError(null);
       } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") return;
-        setStockSnapshot(null);
-        setStockApiState("error");
-        setStockApiError(error instanceof Error ? error.message : "Unable to reach stock API");
+        const failure = error instanceof StockApiError ? error : new StockApiError("network", "Unable to reach the stock API");
+        setStockApiError({ kind: failure.kind, message: failure.message });
+        if (hasData) {
+          setStockApiState("stale");
+        } else {
+          setStockSnapshot(null);
+          setStockApiState("error");
+        }
       }
     };
 
@@ -295,29 +423,106 @@ function App() {
     };
   }, [selectedSymbol]);
 
+  const control = (cmd: "start" | "pause" | "stop" | "reset") => {
+    if (live) {
+      send({ cmd });
+    } else {
+      setSimState(cmd === "start" ? "running" : cmd === "pause" ? "paused" : cmd === "stop" ? "stopped" : "closed");
+    }
+    if (cmd === "reset") {
+      setMarketSeconds(0);
+      setActiveStage(-1);
+    }
+  };
+
+  const changeSpeed = (value: 1 | 10 | 100) => {
+    setSpeed(value);
+    if (live) send({ cmd: "speed", value });
+  };
+
+  const submitOrder = () => {
+    const qty = Number(ticketQty);
+    const price = Number(ticketPrice);
+    if (!Number.isInteger(qty) || qty < 1 || qty > 100000) {
+      setTicketMsg({ ok: false, text: "Quantity must be a whole number between 1 and 100,000." });
+      return;
+    }
+    if (!Number.isFinite(price) || price < 0.01 || price > 100000) {
+      setTicketMsg({ ok: false, text: "Price must be between 0.01 and 100,000." });
+      return;
+    }
+    const sent = send({ cmd: "order", side: ticketSide, qty, price: Math.round(price * 100) / 100 });
+    setTicketMsg(
+      sent
+        ? { ok: true, text: `Sent ${ticketSide} ${qty} @ ${price.toFixed(2)} to the engine queue.` }
+        : { ok: false, text: "Not connected to the engine bridge." },
+    );
+  };
+
   const marketTime = useMemo(() => {
-    const total = 9 * 3600 + 30 * 60 + seconds * speed;
+    const total = 9 * 3600 + 30 * 60 + Math.floor(marketSeconds);
     const hours = Math.floor(total / 3600) % 24;
     const minutes = Math.floor((total % 3600) / 60);
     const secs = total % 60;
     return [hours, minutes, secs].map((part) => part.toString().padStart(2, "0")).join(":");
-  }, [seconds, speed]);
+  }, [marketSeconds]);
+  const today = useMemo(() => new Date().toLocaleDateString("en-CA"), []);
 
-  const reset = () => {
-    setState("closed");
-    setSeconds(0);
-    setActiveStage(-1);
-  };
-
-  const online = state === "running" || state === "paused";
   const sectors = useMemo(
     () => ["All sectors", ...Array.from(new Set(sp500.map((stock) => stock.sector))).sort()],
     [],
   );
-  const visibleStocks = useMemo(
-    () => selectedSector === "All sectors" ? sp500 : sp500.filter((stock) => stock.sector === selectedSector),
-    [selectedSector],
-  );
+  const visibleStocks = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return sp500.filter(
+      (stock) =>
+        (selectedSector === "All sectors" || stock.sector === selectedSector) &&
+        (q === "" || stock.symbol.toLowerCase().includes(q) || stock.name.toLowerCase().includes(q)),
+    );
+  }, [selectedSector, query]);
+
+  // ---- derived engine view ------------------------------------------------
+  const hasLiveData = live && stats !== null;
+  const lastTrade = trades[0];
+  const asks = hasLiveData ? stats.asks : sampleAsks;
+  const bids = hasLiveData ? stats.bids : sampleBids;
+  const maxQty = Math.max(1, ...asks.map((l) => l.qty), ...bids.map((l) => l.qty));
+  const bestAsk = asks[0]?.price;
+  const bestBid = bids[0]?.price;
+  const spread = bestAsk !== undefined && bestBid !== undefined ? bestAsk - bestBid : null;
+  const dash = "—";
+  const histogram = hasLiveData ? stats.latHist : [];
+  const histShown = histogram.slice(0, LAT_BUCKETS_SHOWN - 1).concat(histogram.slice(LAT_BUCKETS_SHOWN - 1).reduce((a, b) => a + b, 0));
+  const histMax = Math.max(1, ...histShown);
+  const histTotal = histShown.reduce((a, b) => a + b, 0);
+
+  const linkLabel =
+    link === "live"
+      ? `Connected · ${TELEMETRY_URL} · engine ${engineState}`
+      : link === "connecting"
+        ? `Connecting to ${TELEMETRY_URL}…`
+        : `Bridge offline · UI is in simulation mode · run telemetry-bridge/bridge.py (${TELEMETRY_URL})`;
+
+  const metrics: [string, string, IconName][] = [
+    ["ORDERS / SEC", hasLiveData ? fmtInt(stats.ordersPerSec) : dash, "activity"],
+    ["TRADES / SEC", hasLiveData ? fmtInt(stats.tradesPerSec) : dash, "bolt"],
+    ["AVG LATENCY", hasLiveData ? fmtUs(stats.avgLatencyUs) : dash, "clock"],
+    ["P99 LATENCY", hasLiveData ? `≤ ${fmtUs(stats.p99LatencyUs)}` : dash, "clock"],
+    ["QUEUE DEPTH", hasLiveData ? fmtInt(stats.queueDepth) : dash, "layers"],
+    ["CPU", hasLiveData ? `${stats.cpuPct.toFixed(0)}%` : dash, "cpu"],
+    ["MEMORY", hasLiveData && stats.rssMb > 0 ? `${stats.rssMb.toFixed(1)} MB` : dash, "server"],
+    ["CAS RETRIES", "n/a", "activity"],
+  ];
+
+  const producerRows = hasLiveData
+    ? stats.producers.map((count, index) => ({
+        id: `P-${String(index + 1).padStart(2, "0")}`,
+        strategy: "Random order generator",
+        side: "B / S",
+        count: fmtInt(count),
+        dot: producerDots[index % producerDots.length],
+      }))
+    : sampleTraders;
 
   return (
     <main className="min-h-screen bg-slate-950 text-slate-300 selection:bg-cyan-400/30">
@@ -339,67 +544,78 @@ function App() {
             </div>
 
             <div className="flex flex-wrap items-center gap-2 xl:justify-center">
-              <div className="flex items-center gap-3 rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 font-mono">
-                <span className="text-xs text-slate-500">2026-10-05</span>
+              <div className="flex items-center gap-3 rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 font-mono" title="Simulated market clock">
+                <span className="text-[9px] font-bold tracking-wider text-slate-600">SIM</span>
+                <span className="text-xs text-slate-500">{today}</span>
                 <span className="text-sm font-bold tabular-nums text-white">{marketTime}</span>
               </div>
               <div className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-bold ${online ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400" : "border-slate-700 bg-slate-800 text-slate-400"}`}>
                 <span className={`size-2 rounded-full ${state === "running" ? "animate-pulse bg-emerald-400" : "bg-slate-500"}`} />
                 MARKET {state === "running" ? "OPEN" : state === "paused" ? "PAUSED" : "CLOSED"}
               </div>
-              <div className="flex rounded-lg border border-slate-800 bg-slate-950 p-1">
-                {[1, 10, 100].map((value) => (
-                  <div
+              <div className="flex rounded-lg border border-slate-800 bg-slate-950 p-1" role="group" aria-label="Simulation speed">
+                {([1, 10, 100] as const).map((value) => (
+                  <button
                     key={value}
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => setSpeed(value)}
-                    onKeyDown={(event) => event.key === "Enter" && setSpeed(value)}
+                    type="button"
+                    aria-pressed={speed === value}
+                    onClick={() => changeSpeed(value)}
                     className={`cursor-pointer rounded px-2.5 py-1.5 text-[11px] font-bold transition ${speed === value ? "bg-slate-700 text-white" : "text-slate-500 hover:text-slate-300"}`}
                   >
                     {value}x
-                  </div>
+                  </button>
                 ))}
               </div>
             </div>
 
             <div className="flex items-center gap-2">
-              <Action label="Start" icon="play" active={state === "running"} onClick={() => setState("running")} />
-              <Action label="Pause" icon="pause" disabled={state !== "running"} onClick={() => setState("paused")} />
-              <Action label="Stop" icon="stop" disabled={!online} onClick={() => setState("stopped")} />
-              <Action label="Reset" icon="reset" onClick={reset} />
+              <Action label="Start" icon="play" active={state === "running"} onClick={() => control("start")} />
+              <Action label="Pause" icon="pause" disabled={state !== "running"} onClick={() => control("pause")} />
+              <Action label="Stop" icon="stop" disabled={!online} onClick={() => control("stop")} />
+              <Action label="Reset" icon="reset" onClick={() => control("reset")} />
             </div>
           </div>
-          <div className="flex items-center gap-2 border-t border-slate-800 px-4 py-2 text-[10px]">
-            <span className="size-1.5 rounded-full bg-amber-400" />
-            <span className="font-bold uppercase tracking-wider text-amber-400">Telemetry bridge</span>
+          <div className="flex flex-wrap items-center gap-2 border-t border-slate-800 px-4 py-2 text-[10px]">
+            <span className={`size-1.5 rounded-full ${link === "live" ? "bg-emerald-400" : link === "connecting" ? "animate-pulse bg-amber-400" : "bg-rose-400"}`} />
+            <span className={`font-bold uppercase tracking-wider ${link === "live" ? "text-emerald-400" : link === "connecting" ? "text-amber-400" : "text-rose-400"}`}>Telemetry bridge</span>
             <span className="text-slate-600">/</span>
-            <span className="text-slate-500">Awaiting engine connection · ws://localhost:9001</span>
+            <span className="text-slate-500">{linkLabel}</span>
+            {engineError && <span className="font-semibold text-rose-400">· {engineError}</span>}
           </div>
         </header>
 
         <div className="grid grid-cols-12 gap-4">
-          <Panel title="Virtual Traders" eyebrow="Workload generators · 6" icon="traders" className="col-span-12 xl:col-span-3">
+          <Panel
+            title={hasLiveData ? "Order Producers" : "Virtual Traders"}
+            eyebrow={hasLiveData ? `Engine workload · ${producerRows.length} producer threads` : `Sample workload generators · ${producerRows.length}`}
+            icon="traders"
+            className="col-span-12 xl:col-span-3"
+            action={<Badge kind={hasLiveData ? "live" : "sample"} />}
+          >
             <div className="grid grid-cols-[1fr_auto_auto] border-b border-slate-800 px-4 py-2 text-[9px] font-bold uppercase tracking-wider text-slate-600">
-              <span>Trader / Strategy</span><span>Intent</span><span className="ml-5">Position</span>
+              <span>{hasLiveData ? "Producer" : "Trader"} / Strategy</span><span>Intent</span><span className="ml-5">{hasLiveData ? "Orders" : "Position"}</span>
             </div>
             <div className="divide-y divide-slate-800/80">
-              {traders.map((trader) => (
-                <div key={trader.id} className="grid grid-cols-[1fr_auto_auto] items-center px-4 py-2.5 transition hover:bg-slate-800/40">
+              {producerRows.map((row) => (
+                <div key={row.id} className="grid grid-cols-[1fr_auto_auto] items-center px-4 py-2.5 transition hover:bg-slate-800/40">
                   <div className="flex items-center gap-2.5">
-                    <span className={`size-1.5 rounded-full ${online ? `${trader.dot} animate-pulse` : "bg-slate-600"}`} />
+                    <span className={`size-1.5 rounded-full ${state === "running" && hasLiveData ? `${row.dot} animate-pulse` : "bg-slate-600"}`} />
                     <div>
-                      <div className="font-mono text-[11px] font-bold text-slate-200">{trader.id}</div>
-                      <div className="text-[10px] text-slate-500">{trader.strategy}</div>
+                      <div className="font-mono text-[11px] font-bold text-slate-200">{row.id}</div>
+                      <div className="text-[10px] text-slate-500">{row.strategy}</div>
                     </div>
                   </div>
-                  <span className={`rounded border px-1.5 py-1 font-mono text-[9px] font-bold ${trader.side === "BUY" ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-400" : trader.side === "SELL" ? "border-rose-500/20 bg-rose-500/10 text-rose-400" : "border-slate-700 bg-slate-800 text-slate-400"}`}>{trader.side}</span>
-                  <span className="ml-5 font-mono text-[11px] text-slate-400">{trader.position}</span>
+                  <span className={`rounded border px-1.5 py-1 font-mono text-[9px] font-bold ${row.side === "BUY" ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-400" : row.side === "SELL" ? "border-rose-500/20 bg-rose-500/10 text-rose-400" : "border-slate-700 bg-slate-800 text-slate-400"}`}>{row.side}</span>
+                  <span className="ml-5 font-mono text-[11px] text-slate-400">{row.count}</span>
                 </div>
               ))}
             </div>
             <div className="grid grid-cols-3 border-t border-slate-800 bg-slate-950/40">
-              {[["ORDERS", "—"], ["BUYS", "—"], ["SELLS", "—"]].map(([label, value]) => (
+              {[
+                ["ORDERS", hasLiveData ? fmtInt(stats.submitted) : dash],
+                ["TRADES", hasLiveData ? fmtInt(stats.tradesTotal) : dash],
+                ["IN QUEUE", hasLiveData ? fmtInt(stats.queueDepth) : dash],
+              ].map(([label, value]) => (
                 <div key={label} className="border-r border-slate-800 px-3 py-2.5 text-center last:border-r-0">
                   <div className="font-mono text-sm font-bold text-slate-300">{value}</div>
                   <div className="text-[9px] font-bold tracking-wider text-slate-600">{label}</div>
@@ -413,33 +629,41 @@ function App() {
             eyebrow="End-to-end event pipeline"
             icon="activity"
             className="col-span-12 xl:col-span-9"
-            action={<div className="flex items-center gap-2 rounded-md bg-slate-950 px-2.5 py-1.5 font-mono text-[10px] text-slate-500"><span className="size-1.5 rounded-full bg-cyan-400" /> TRACE MODE</div>}
+            action={<div className="flex items-center gap-2"><Badge kind="simulated" label="ILLUSTRATIVE ANIMATION" /><div className="flex items-center gap-2 rounded-md bg-slate-950 px-2.5 py-1.5 font-mono text-[10px] text-slate-500"><span className="size-1.5 rounded-full bg-cyan-400" /> TRACE MODE</div></div>}
           >
             <div className="p-4">
               <div className="mb-4 flex items-center justify-between rounded-lg border border-cyan-500/20 bg-cyan-500/5 px-3 py-2.5">
                 <div className="flex items-center gap-3">
-                  <div className="rounded bg-cyan-400/10 px-2 py-1 font-mono text-xs font-black text-cyan-400">ORD—PENDING</div>
+                  <div className="rounded bg-cyan-400/10 px-2 py-1 font-mono text-xs font-black text-cyan-400">{lastTrade ? `TRADE #${lastTrade.id}` : "NO TRADE YET"}</div>
                   <div className="font-mono text-xs text-slate-400">
-                    <span className="font-bold text-emerald-400">BUY</span> 100 {selectedSymbol} @ $105.00
+                    {lastTrade ? (
+                      <>
+                        <span className="font-bold text-emerald-400">{lastTrade.qty}</span> @ ${lastTrade.price.toFixed(2)} · buy order {lastTrade.buy} × sell order {lastTrade.sell}
+                      </>
+                    ) : live ? (
+                      "Start the engine to see matched trades"
+                    ) : (
+                      "Engine bridge offline — pipeline below is an animation only"
+                    )}
                   </div>
                 </div>
-                <div className="hidden font-mono text-[10px] text-slate-600 sm:block">Waiting for telemetry event</div>
+                <div className="hidden font-mono text-[10px] text-slate-600 sm:block">{live ? "Live engine event" : "Waiting for telemetry"}</div>
               </div>
 
               <div className="relative overflow-x-auto pb-2">
                 <div className="absolute left-8 right-8 top-7 h-px bg-slate-700" />
-                <div className={`absolute left-8 top-7 h-px bg-cyan-400 transition-all duration-500 ${activeStage < 0 ? "w-0" : activeStage === stages.length - 1 ? "right-8" : ""}`} style={activeStage >= 0 && activeStage < stages.length - 1 ? { width: `${(activeStage / (stages.length - 1)) * 90}%` } : undefined} />
-                <div className="relative grid min-w-[850px] grid-cols-9 gap-2">
+                <div className={`absolute left-8 top-7 h-px bg-cyan-400 transition-all duration-500 ${activeStage < 0 ? "w-0" : ""}`} style={activeStage >= 0 ? { width: `${(activeStage / (stages.length - 1)) * 90}%` } : undefined} />
+                <div className="relative grid min-w-[760px] grid-cols-7 gap-2">
                   {stages.map((stage, index) => {
                     const active = index === activeStage;
                     const complete = activeStage >= 0 && index < activeStage;
                     return (
                       <div key={stage.label} className="flex flex-col items-center text-center">
-                        <div className={`grid size-14 place-items-center rounded-xl border-2 transition-all duration-300 ${active ? "scale-110 border-cyan-400 bg-cyan-400 text-slate-950 shadow-lg shadow-cyan-500/30" : complete ? "border-cyan-500/50 bg-slate-900 text-cyan-400" : "border-slate-700 bg-slate-900 text-slate-500"}`}>
+                        <div className={`grid size-14 place-items-center rounded-xl border-2 transition-all duration-300 ${stage.planned ? "border-dashed border-slate-700 bg-slate-900/40 text-slate-600" : active ? "scale-110 border-cyan-400 bg-cyan-400 text-slate-950 shadow-lg shadow-cyan-500/30" : complete ? "border-cyan-500/50 bg-slate-900 text-cyan-400" : "border-slate-700 bg-slate-900 text-slate-500"}`}>
                           <Icon name={stage.icon} size="lg" />
                         </div>
-                        <div className={`mt-2 text-[9px] font-black tracking-wide ${active ? "text-cyan-400" : "text-slate-400"}`}>{stage.label}</div>
-                        <div className="mt-0.5 font-mono text-[9px] text-slate-600">{stage.meta}</div>
+                        <div className={`mt-2 text-[9px] font-black tracking-wide ${active ? "text-cyan-400" : stage.planned ? "text-slate-600" : "text-slate-400"}`}>{stage.label}</div>
+                        <div className={`mt-0.5 font-mono text-[9px] ${stage.planned ? "text-blue-400/70" : "text-slate-600"}`}>{stage.meta}</div>
                       </div>
                     );
                   })}
@@ -447,7 +671,12 @@ function App() {
               </div>
             </div>
             <div className="grid grid-cols-2 border-t border-slate-800 bg-slate-950/50 md:grid-cols-4">
-              {[["TRACE ID", "Not assigned"], ["CURRENT STAGE", activeStage >= 0 ? stages[activeStage].label : "Idle"], ["ELAPSED", "— μs"], ["RESULT", "Awaiting event"]].map(([label, value]) => (
+              {[
+                ["LAST TRADE ID", lastTrade ? String(lastTrade.id) : "Not assigned"],
+                ["CURRENT STAGE", activeStage >= 0 ? stages[activeStage].label : "Idle"],
+                ["AVG QUEUE→MATCH", hasLiveData ? fmtUs(stats.avgLatencyUs) : "— μs"],
+                ["RESULT", lastTrade ? `${lastTrade.qty} @ ${lastTrade.price.toFixed(2)}` : "Awaiting event"],
+              ].map(([label, value]) => (
                 <div key={label} className="border-r border-slate-800 px-4 py-3 last:border-r-0">
                   <div className="text-[9px] font-bold uppercase tracking-wider text-slate-600">{label}</div>
                   <div className="mt-1 font-mono text-[11px] font-semibold text-slate-300">{value}</div>
@@ -456,9 +685,20 @@ function App() {
             </div>
           </Panel>
 
-          <Panel title="OS & Concurrency" eyebrow="Linux runtime telemetry" icon="cpu" className="col-span-12 lg:col-span-5 xl:col-span-3">
+          <Panel
+            title="OS & Concurrency"
+            eyebrow="Process telemetry"
+            icon="cpu"
+            className="col-span-12 lg:col-span-5 xl:col-span-3"
+            action={<Badge kind={hasLiveData ? "live" : "sample"} label={hasLiveData ? "LIVE" : "NO DATA"} />}
+          >
             <div className="grid grid-cols-2 gap-px bg-slate-800">
-              {[["WORKER THREADS", "—", "Pinned cores"], ["CPU UTIL.", "—", "No sample"], ["QUEUE DEPTH", "—", "MPSC"], ["PUSH / POP", "—", "events/sec"]].map(([label, value, meta]) => (
+              {[
+                ["WORKER THREADS", hasLiveData ? String(stats.threads) : dash, "4 producers + 1 matcher"],
+                ["CPU UTIL.", hasLiveData ? `${stats.cpuPct.toFixed(0)}%` : dash, "whole process (matcher busy-polls)"],
+                ["QUEUE DEPTH", hasLiveData ? fmtInt(stats.queueDepth) : dash, "submitted − processed"],
+                ["PUSH / POP", hasLiveData ? fmtInt(stats.ordersPerSec) : dash, "orders/sec processed"],
+              ].map(([label, value, meta]) => (
                 <div key={label} className="bg-slate-900 px-4 py-3">
                   <div className="text-[9px] font-bold tracking-wider text-slate-600">{label}</div>
                   <div className="mt-1 font-mono text-xl font-bold text-slate-200">{value}</div>
@@ -467,26 +707,33 @@ function App() {
               ))}
             </div>
             <div className="space-y-3 px-4 py-3.5">
-              {[["CAS Attempts", "—"], ["CAS Success", "—"], ["CAS Retries", "—"], ["Thread Affinity", "Awaiting /proc"]].map(([label, value]) => (
+              {[["CAS Attempts", "not instrumented"], ["CAS Success", "not instrumented"], ["CAS Retries", "not instrumented"], ["Thread Affinity", "not instrumented"]].map(([label, value]) => (
                 <div key={label} className="flex items-center justify-between text-[11px]">
                   <span className="text-slate-500">{label}</span>
-                  <span className="font-mono font-semibold text-slate-300">{value}</span>
+                  <span className="font-mono font-semibold text-slate-500">{value}</span>
                 </div>
               ))}
             </div>
           </Panel>
 
-          <Panel title="Matching Engine" eyebrow={`Price-time priority · ${selectedSymbol}`} icon="book" className="col-span-12 lg:col-span-7 xl:col-span-5">
+          <Panel
+            title="Matching Engine"
+            eyebrow="Price-time priority · SYM-1 (synthetic)"
+            icon="book"
+            className="col-span-12 lg:col-span-7 xl:col-span-5"
+            action={<Badge kind={hasLiveData ? "live" : "sample"} />}
+          >
             <div className="grid grid-cols-[1fr_auto_1fr]">
               <div className="px-4 py-3">
                 <div className="mb-2 flex items-center justify-between text-[9px] font-bold uppercase tracking-wider">
                   <span className="text-rose-400">Sell / Ask</span><span className="text-slate-600">Qty</span>
                 </div>
                 <div className="space-y-1">
-                  {asks.map(([price, qty, width]) => (
-                    <div key={price} className="relative flex items-center justify-between overflow-hidden rounded px-2 py-1.5 font-mono text-[11px]">
-                      <div className="absolute inset-y-0 right-0 bg-rose-500/10" style={{ width }} />
-                      <span className="relative font-semibold text-rose-400">${price}</span><span className="relative text-slate-400">{qty}</span>
+                  {asks.length === 0 && <div className="py-2 font-mono text-[10px] text-slate-600">No resting asks</div>}
+                  {asks.map((level) => (
+                    <div key={level.price} className="relative flex items-center justify-between overflow-hidden rounded px-2 py-1.5 font-mono text-[11px]">
+                      <div className="absolute inset-y-0 right-0 bg-rose-500/10" style={{ width: `${(level.qty / maxQty) * 100}%` }} />
+                      <span className="relative font-semibold text-rose-400">${level.price.toFixed(2)}</span><span className="relative text-slate-400">{fmtInt(level.qty)}</span>
                     </div>
                   ))}
                 </div>
@@ -497,10 +744,11 @@ function App() {
                   <span className="text-emerald-400">Buy / Bid</span><span className="text-slate-600">Qty</span>
                 </div>
                 <div className="space-y-1">
-                  {bids.map(([price, qty, width]) => (
-                    <div key={price} className="relative flex items-center justify-between overflow-hidden rounded px-2 py-1.5 font-mono text-[11px]">
-                      <div className="absolute inset-y-0 left-0 bg-emerald-500/10" style={{ width }} />
-                      <span className="relative font-semibold text-emerald-400">${price}</span><span className="relative text-slate-400">{qty}</span>
+                  {bids.length === 0 && <div className="py-2 font-mono text-[10px] text-slate-600">No resting bids</div>}
+                  {bids.map((level) => (
+                    <div key={level.price} className="relative flex items-center justify-between overflow-hidden rounded px-2 py-1.5 font-mono text-[11px]">
+                      <div className="absolute inset-y-0 left-0 bg-emerald-500/10" style={{ width: `${(level.qty / maxQty) * 100}%` }} />
+                      <span className="relative font-semibold text-emerald-400">${level.price.toFixed(2)}</span><span className="relative text-slate-400">{fmtInt(level.qty)}</span>
                     </div>
                   ))}
                 </div>
@@ -509,48 +757,111 @@ function App() {
             <div className="flex items-center justify-between border-t border-slate-800 bg-slate-950/50 px-4 py-3">
               <div>
                 <div className="text-[9px] font-bold uppercase tracking-wider text-slate-600">Spread</div>
-                <div className="font-mono text-xs font-bold text-amber-400">$0.10</div>
+                <div className="font-mono text-xs font-bold text-amber-400">{spread !== null ? `$${spread.toFixed(2)}` : dash}</div>
               </div>
               <div className="text-center">
                 <div className="text-[9px] font-bold uppercase tracking-wider text-slate-600">Last trade</div>
-                <div className="font-mono text-xs font-bold text-slate-300">No trades</div>
+                <div className="font-mono text-xs font-bold text-slate-300">{lastTrade ? `$${lastTrade.price.toFixed(2)}` : "No trades"}</div>
               </div>
               <div className="text-right">
                 <div className="text-[9px] font-bold uppercase tracking-wider text-slate-600">Matched</div>
-                <div className="font-mono text-xs font-bold text-slate-300">—</div>
+                <div className="font-mono text-xs font-bold text-slate-300">{hasLiveData ? fmtInt(stats.tradesTotal) : dash}</div>
               </div>
+            </div>
+
+            <div className="border-t border-slate-800 px-4 py-3">
+              <div className="mb-2 text-[9px] font-bold uppercase tracking-wider text-slate-600">Trade tape</div>
+              {trades.length === 0 ? (
+                <div className="font-mono text-[10px] text-slate-600">{live ? "No trades yet" : "Connect the bridge and start the engine"}</div>
+              ) : (
+                <div className="max-h-28 space-y-0.5 overflow-y-auto font-mono text-[10px]">
+                  {trades.slice(0, 8).map((trade) => (
+                    <div key={trade.id} className="flex justify-between text-slate-400">
+                      <span className="text-slate-600">#{trade.id}</span>
+                      <span className="font-semibold text-slate-200">${trade.price.toFixed(2)}</span>
+                      <span>{trade.qty}</span>
+                      <span className="text-slate-600">b{trade.buy} / s{trade.sell}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="border-t border-slate-800 px-4 py-3">
+              <div className="mb-2 flex items-center justify-between">
+                <div className="text-[9px] font-bold uppercase tracking-wider text-slate-600">Order ticket</div>
+                {!(live && state === "running") && <span className="text-[9px] text-slate-600">Start the engine (live link) to place orders</span>}
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex rounded-md border border-slate-800 bg-slate-950 p-0.5" role="group" aria-label="Order side">
+                  {(["BUY", "SELL"] as const).map((side) => (
+                    <button
+                      key={side}
+                      type="button"
+                      aria-pressed={ticketSide === side}
+                      onClick={() => setTicketSide(side)}
+                      className={`rounded px-3 py-1.5 text-[10px] font-bold transition ${ticketSide === side ? (side === "BUY" ? "bg-emerald-400 text-slate-950" : "bg-rose-400 text-slate-950") : "text-slate-500 hover:text-slate-300"}`}
+                    >
+                      {side}
+                    </button>
+                  ))}
+                </div>
+                <label className="flex items-center gap-1.5 text-[10px] text-slate-500">
+                  Qty
+                  <input value={ticketQty} onChange={(event) => setTicketQty(event.target.value)} inputMode="numeric" className="w-20 rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 font-mono text-[11px] text-slate-200 outline-none focus:border-cyan-400" />
+                </label>
+                <label className="flex items-center gap-1.5 text-[10px] text-slate-500">
+                  Price
+                  <input value={ticketPrice} onChange={(event) => setTicketPrice(event.target.value)} inputMode="decimal" className="w-24 rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 font-mono text-[11px] text-slate-200 outline-none focus:border-cyan-400" />
+                </label>
+                <button
+                  type="button"
+                  disabled={!(live && state === "running")}
+                  onClick={submitOrder}
+                  className="rounded-md border border-cyan-400 bg-cyan-400 px-3 py-1.5 text-[10px] font-bold text-slate-950 transition hover:bg-cyan-300 disabled:cursor-not-allowed disabled:border-slate-800 disabled:bg-slate-900 disabled:text-slate-600"
+                >
+                  Submit order
+                </button>
+              </div>
+              {ticketMsg && <div className={`mt-2 text-[10px] ${ticketMsg.ok ? "text-emerald-400" : "text-rose-400"}`} role="status">{ticketMsg.text}</div>}
             </div>
           </Panel>
 
-          <Panel title="LSM Storage" eyebrow="Rust persistence engine" icon="database" className="col-span-12 xl:col-span-4">
+          <Panel
+            title="LSM Storage"
+            eyebrow="WAL → MemTable → SSTable"
+            icon="database"
+            className="col-span-12 xl:col-span-4"
+            action={<Badge kind="planned" label="NOT IMPLEMENTED" />}
+          >
             <div className="p-4">
               <div className="flex items-stretch gap-2">
                 {[["WAL", "Write-ahead log", "database"], ["MEMTABLE", "In-memory", "layers"], ["SSTABLE", "On-disk", "server"]].map(([label, meta, icon], index) => (
                   <div className="contents" key={label}>
                     {index > 0 && <div className="flex items-center text-slate-700"><Icon name="chevron" size="sm" /></div>}
-                    <div className="flex min-w-0 flex-1 flex-col items-center rounded-lg border border-slate-800 bg-slate-950/60 px-2 py-3 text-center">
-                      <div className="mb-2 grid size-8 place-items-center rounded bg-slate-800 text-violet-400"><Icon name={icon as IconName} /></div>
-                      <div className="text-[9px] font-black tracking-wider text-slate-300">{label}</div>
+                    <div className="flex min-w-0 flex-1 flex-col items-center rounded-lg border border-dashed border-slate-700 bg-slate-950/40 px-2 py-3 text-center">
+                      <div className="mb-2 grid size-8 place-items-center rounded bg-slate-800 text-slate-500"><Icon name={icon as IconName} /></div>
+                      <div className="text-[9px] font-black tracking-wider text-slate-400">{label}</div>
                       <div className="mt-0.5 text-[9px] text-slate-600">{meta}</div>
-                      <div className="mt-2 font-mono text-xs font-bold text-slate-400">—</div>
+                      <div className="mt-2 font-mono text-[9px] font-bold text-blue-400/70">PLANNED</div>
                     </div>
                   </div>
                 ))}
               </div>
               <div className="mt-3 flex items-center justify-between rounded-lg border border-dashed border-slate-700 px-3 py-2 text-[10px]">
-                <span className="text-slate-500">Compaction</span>
-                <span className="font-mono text-slate-600">IDLE · FUTURE PHASE</span>
+                <span className="text-slate-500">Compaction · Bloom filters · crash recovery</span>
+                <span className="font-mono text-slate-600">ROADMAP</span>
               </div>
             </div>
           </Panel>
 
           <section className="col-span-12 overflow-hidden rounded-xl border border-slate-800 bg-slate-900/70">
             <div className="grid grid-cols-2 divide-x divide-y divide-slate-800 md:grid-cols-4 xl:grid-cols-8 xl:divide-y-0">
-              {[["ORDERS / SEC", "—", "activity"], ["TRADES / SEC", "—", "bolt"], ["AVG LATENCY", "—", "clock"], ["P99 LATENCY", "—", "clock"], ["QUEUE DEPTH", "—", "layers"], ["CPU", "—", "cpu"], ["MEMORY", "—", "server"], ["CAS RETRIES", "—", "reset"]].map(([label, value, icon]) => (
+              {metrics.map(([label, value, icon]) => (
                 <div key={label} className="group px-4 py-3 transition hover:bg-slate-800/40">
                   <div className="mb-2 flex items-center justify-between text-slate-600 group-hover:text-cyan-400">
-                    <Icon name={icon as IconName} size="sm" />
-                    <span className="size-1.5 rounded-full bg-slate-700" />
+                    <Icon name={icon} size="sm" />
+                    <span className={`size-1.5 rounded-full ${hasLiveData ? "bg-emerald-400" : "bg-slate-700"}`} />
                   </div>
                   <div className="font-mono text-lg font-black text-slate-300">{value}</div>
                   <div className="text-[9px] font-bold tracking-wider text-slate-600">{label}</div>
@@ -561,25 +872,25 @@ function App() {
 
           <Panel
             title="System Architecture"
-            eyebrow="MVP implementation boundary"
+            eyebrow="What exists today vs. roadmap"
             icon="layers"
             className="col-span-12 xl:col-span-7"
           >
             <div className="border-b border-slate-800 p-4">
               <div className="flex min-w-0 items-stretch gap-2 overflow-x-auto pb-1">
                 {[
-                  ["C++ ENGINE", "Matching · MPSC", "cpu"],
-                  ["RUST LSM", "WAL · MemTable", "database"],
-                  ["TELEMETRY", "Events · Metrics", "activity"],
-                  ["WEBSOCKET", "Control · Stream", "server"],
-                  ["TICKFORGE UI", "Monitor only", "layers"],
-                ].map(([label, meta, icon], index) => (
-                  <div className="contents" key={label}>
+                  ["C++ ENGINE", "Matching · MPSC", "cpu", false],
+                  ["TELEMETRY", "JSON lines · stats", "activity", false],
+                  ["WS BRIDGE", "Python · control", "server", false],
+                  ["TICKFORGE UI", "Monitor + ticket", "layers", false],
+                  ["LSM STORAGE", "WAL · MemTable", "database", true],
+                ].map(([label, meta, icon, planned], index) => (
+                  <div className="contents" key={label as string}>
                     {index > 0 && <div className="flex items-center text-slate-700"><Icon name="chevron" size="sm" /></div>}
-                    <div className="min-w-32 flex-1 rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-3">
-                      <div className="mb-3 grid size-8 place-items-center rounded bg-slate-800 text-cyan-400"><Icon name={icon as IconName} /></div>
-                      <div className="text-[9px] font-black tracking-wider text-slate-300">{label}</div>
-                      <div className="mt-1 text-[9px] text-slate-600">{meta}</div>
+                    <div className={`min-w-32 flex-1 rounded-lg border px-3 py-3 ${planned ? "border-dashed border-slate-700 bg-slate-950/30" : "border-slate-800 bg-slate-950/60"}`}>
+                      <div className={`mb-3 grid size-8 place-items-center rounded bg-slate-800 ${planned ? "text-slate-500" : "text-cyan-400"}`}><Icon name={icon as IconName} /></div>
+                      <div className="text-[9px] font-black tracking-wider text-slate-300">{label as string}</div>
+                      <div className="mt-1 text-[9px] text-slate-600">{planned ? "planned" : (meta as string)}</div>
                     </div>
                   </div>
                 ))}
@@ -588,11 +899,11 @@ function App() {
             <div className="grid gap-px bg-slate-800 md:grid-cols-2">
               <div className="bg-slate-900 p-4">
                 <div className="mb-3 flex items-center justify-between">
-                  <div className="text-[10px] font-black uppercase tracking-wider text-emerald-400">MVP scope</div>
-                  <div className="rounded bg-emerald-500/10 px-2 py-1 font-mono text-[9px] font-bold text-emerald-400">{mvpCapabilities.length} capabilities</div>
+                  <div className="text-[10px] font-black uppercase tracking-wider text-emerald-400">Working today</div>
+                  <div className="rounded bg-emerald-500/10 px-2 py-1 font-mono text-[9px] font-bold text-emerald-400">{workingToday.length} capabilities</div>
                 </div>
                 <div className="grid grid-cols-2 gap-x-4 gap-y-2">
-                  {mvpCapabilities.map((capability) => (
+                  {workingToday.map((capability) => (
                     <div key={capability} className="flex items-center gap-2 text-[10px] text-slate-400">
                       <span className="grid size-4 shrink-0 place-items-center rounded-full bg-emerald-500/10 text-[9px] font-black text-emerald-400">✓</span>
                       <span>{capability}</span>
@@ -602,11 +913,11 @@ function App() {
               </div>
               <div className="bg-slate-900 p-4">
                 <div className="mb-3 flex items-center justify-between">
-                  <div className="text-[10px] font-black uppercase tracking-wider text-blue-400">Future roadmap</div>
-                  <div className="rounded bg-blue-500/10 px-2 py-1 font-mono text-[9px] font-bold text-blue-400">{futureCapabilities.length} planned</div>
+                  <div className="text-[10px] font-black uppercase tracking-wider text-blue-400">Roadmap</div>
+                  <div className="rounded bg-blue-500/10 px-2 py-1 font-mono text-[9px] font-bold text-blue-400">{roadmap.length} planned</div>
                 </div>
                 <div className="grid grid-cols-2 gap-x-4 gap-y-2">
-                  {futureCapabilities.map((capability) => (
+                  {roadmap.map((capability) => (
                     <div key={capability} className="flex items-center gap-2 text-[10px] text-slate-400">
                       <span className="size-2 shrink-0 rounded-full bg-blue-400 shadow-sm shadow-blue-400" />
                       <span>{capability}</span>
@@ -618,6 +929,45 @@ function App() {
           </Panel>
 
           <Panel
+            title="Latency Histogram"
+            eyebrow="Queue → match, since engine start"
+            icon="clock"
+            className="col-span-12 xl:col-span-5"
+            action={<Badge kind={hasLiveData ? "live" : "sample"} label={hasLiveData ? "LIVE" : "NO DATA"} />}
+          >
+            {hasLiveData && histTotal > 0 ? (
+              <div className="p-4">
+                <div className="flex h-36 items-end gap-1 rounded-lg border border-slate-800 bg-slate-950/60 px-2 pb-2 pt-3">
+                  {histShown.map((count, index) => (
+                    <div key={index} className="flex h-full flex-1 flex-col justify-end" title={`${index === LAT_BUCKETS_SHOWN - 1 ? "≥" : "<"} ${fmtUs(2 ** (index === LAT_BUCKETS_SHOWN - 1 ? index - 1 : index))}: ${count.toLocaleString()} orders`}>
+                      <div className="w-full rounded-t bg-cyan-400/80" style={{ height: `${Math.max(count > 0 ? 3 : 0, (count / histMax) * 100)}%` }} />
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-1 flex gap-1 px-2 font-mono text-[8px] text-slate-600">
+                  {histShown.map((_, index) => (
+                    <div key={index} className="flex-1 text-center">{index % 4 === 0 ? fmtUs(2 ** index).replace(" ", "") : ""}</div>
+                  ))}
+                </div>
+                <div className="mt-3 grid grid-cols-4 gap-2 text-center">
+                  {[["P50", `≤ ${fmtUs(stats.p50LatencyUs)}`], ["P99", `≤ ${fmtUs(stats.p99LatencyUs)}`], ["AVG", fmtUs(stats.avgLatencyUs)], ["SAMPLES", fmtInt(histTotal)]].map(([label, value]) => (
+                    <div key={label} className="rounded-md border border-slate-800 bg-slate-950/50 px-2 py-2">
+                      <div className="font-mono text-[11px] font-bold text-slate-200">{value}</div>
+                      <div className="text-[9px] font-bold tracking-wider text-slate-600">{label}</div>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-2 text-[9px] text-slate-600">Percentiles are bucket upper bounds (power-of-two µs buckets). Includes time spent waiting in the queue.</div>
+              </div>
+            ) : (
+              <div className="flex min-h-56 flex-col items-center justify-center px-6 py-10 text-center text-[10px] text-slate-500">
+                <div className="mb-2 text-xs font-bold text-slate-400">No latency samples yet</div>
+                {live ? "Press Start to run the engine and collect samples." : "Connect the telemetry bridge, then start the engine."}
+              </div>
+            )}
+          </Panel>
+
+          <Panel
             title={`${selectedSymbol} Market Data`}
             eyebrow="Python stock API · 1 day / 5 minute interval"
             icon="activity"
@@ -626,11 +976,11 @@ function App() {
               <div className={`flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-[9px] font-bold uppercase tracking-wider ${
                 stockApiState === "online"
                   ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-400"
-                  : stockApiState === "loading"
+                  : stockApiState === "loading" || stockApiState === "stale"
                     ? "border-amber-500/20 bg-amber-500/10 text-amber-400"
                     : "border-rose-500/20 bg-rose-500/10 text-rose-400"
               }`}>
-                <span className={`size-1.5 rounded-full ${stockApiState === "online" ? "animate-pulse bg-emerald-400" : stockApiState === "loading" ? "animate-pulse bg-amber-400" : "bg-rose-400"}`} />
+                <span className={`size-1.5 rounded-full ${stockApiState === "online" ? "animate-pulse bg-emerald-400" : stockApiState === "loading" || stockApiState === "stale" ? "animate-pulse bg-amber-400" : "bg-rose-400"}`} />
                 API {stockApiState}
               </div>
             }
@@ -646,6 +996,11 @@ function App() {
                       </div>
                     </div>
                     <div className="mt-1 text-[10px] text-slate-500">Last update {new Date(stockSnapshot.updatedAt).toLocaleString()}</div>
+                    {stockApiState === "stale" && stockApiError && (
+                      <div className="mt-2 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-[10px] text-amber-400" role="status">
+                        Showing last good data — latest refresh failed: {stockApiError.message}
+                      </div>
+                    )}
                   </div>
                   <div className="space-y-3">
                     {[
@@ -662,7 +1017,7 @@ function App() {
                   </div>
                 </div>
                 <div className="bg-slate-900 p-4">
-                  <PriceChart snapshot={stockSnapshot} />
+                  <PriceChart key={stockSnapshot.symbol} snapshot={stockSnapshot} />
                 </div>
               </div>
             ) : (
@@ -670,11 +1025,19 @@ function App() {
                 <div className={`mb-4 grid size-12 place-items-center rounded-xl border ${stockApiState === "loading" ? "animate-pulse border-amber-500/30 bg-amber-500/10 text-amber-400" : "border-rose-500/30 bg-rose-500/10 text-rose-400"}`}>
                   <Icon name={stockApiState === "loading" ? "clock" : "server"} size="lg" />
                 </div>
-                <div className="text-xs font-bold text-slate-300">{stockApiState === "loading" ? `Loading ${selectedSymbol} market data` : "Python stock API unavailable"}</div>
+                <div className="text-xs font-bold text-slate-300">
+                  {stockApiState === "loading"
+                    ? `Loading ${selectedSymbol} market data`
+                    : stockApiError?.kind === "network"
+                      ? "Python stock API unavailable"
+                      : `Couldn't load ${selectedSymbol}`}
+                </div>
                 <div className="mt-2 max-w-xl text-[10px] leading-relaxed text-slate-500">
                   {stockApiState === "loading"
                     ? "Waiting for a valid quote and OHLCV history response."
-                    : `${stockApiError}. Start the Python service or set VITE_STOCK_API_URL in your .env file.`}
+                    : stockApiError?.kind === "network"
+                      ? "Start the Python service (uvicorn main:app in market-data/) or set VITE_STOCK_API_URL in your .env file."
+                      : stockApiError?.message}
                 </div>
                 <div className="mt-4 rounded-md bg-slate-950 px-3 py-2 font-mono text-[9px] text-slate-600">GET /api/stocks/{selectedSymbol}?range=1d&amp;interval=5m</div>
               </div>
@@ -683,20 +1046,19 @@ function App() {
 
           <Panel
             title="S&P 500 Universe"
-            eyebrow={`${sp500.length} current constituents · 11 sectors`}
+            eyebrow={`${sp500.length} current constituents · ${sectors.length - 1} sectors`}
             icon="book"
             className="col-span-12 xl:col-span-5"
             action={
-              <div
-                role="button"
-                tabIndex={0}
+              <button
+                type="button"
+                aria-expanded={instrumentsOpen}
                 onClick={() => setInstrumentsOpen((value) => !value)}
-                onKeyDown={(event) => event.key === "Enter" && setInstrumentsOpen((value) => !value)}
                 className="flex cursor-pointer items-center gap-2 rounded-md border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-[10px] font-bold text-slate-300 transition hover:border-slate-500"
               >
                 {instrumentsOpen ? "Collapse list" : "Browse all stocks"}
                 <span className={`transition-transform ${instrumentsOpen ? "rotate-90" : ""}`}><Icon name="chevron" size="sm" /></span>
-              </div>
+              </button>
             }
           >
             <div className="flex items-center justify-between border-b border-slate-800 bg-slate-950/40 px-4 py-3">
@@ -711,14 +1073,22 @@ function App() {
             </div>
             {instrumentsOpen ? (
               <>
+                <div className="border-b border-slate-800 px-4 py-3">
+                  <input
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                    placeholder="Search symbol or company…"
+                    aria-label="Search instruments"
+                    className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-[11px] text-slate-200 outline-none placeholder:text-slate-600 focus:border-cyan-400"
+                  />
+                </div>
                 <div className="flex gap-1.5 overflow-x-auto border-b border-slate-800 px-4 py-3">
                   {sectors.map((sector) => (
-                    <div
+                    <button
                       key={sector}
-                      role="button"
-                      tabIndex={0}
+                      type="button"
+                      aria-pressed={selectedSector === sector}
                       onClick={() => setSelectedSector(sector)}
-                      onKeyDown={(event) => event.key === "Enter" && setSelectedSector(sector)}
                       className={`shrink-0 cursor-pointer rounded-md border px-2 py-1.5 text-[9px] font-bold transition ${
                         selectedSector === sector
                           ? "border-cyan-400/40 bg-cyan-400/10 text-cyan-400"
@@ -726,18 +1096,18 @@ function App() {
                       }`}
                     >
                       {sector}
-                    </div>
+                    </button>
                   ))}
                 </div>
                 <div className="grid max-h-80 grid-cols-1 overflow-y-auto sm:grid-cols-2">
+                  {visibleStocks.length === 0 && <div className="col-span-full px-4 py-6 text-center text-[10px] text-slate-600">No instruments match your search.</div>}
                   {visibleStocks.map((stock) => (
-                    <div
+                    <button
                       key={stock.symbol}
-                      role="button"
-                      tabIndex={0}
+                      type="button"
+                      aria-pressed={selectedSymbol === stock.symbol}
                       onClick={() => setSelectedSymbol(stock.symbol)}
-                      onKeyDown={(event) => event.key === "Enter" && setSelectedSymbol(stock.symbol)}
-                      className={`flex cursor-pointer items-center justify-between border-b border-slate-800/70 px-4 py-2.5 transition sm:odd:border-r ${
+                      className={`flex cursor-pointer items-center justify-between border-b border-slate-800/70 px-4 py-2.5 text-left transition sm:odd:border-r ${
                         selectedSymbol === stock.symbol ? "bg-cyan-400/10" : "hover:bg-slate-800/40"
                       }`}
                     >
@@ -746,18 +1116,18 @@ function App() {
                         <div className="truncate text-[9px] text-slate-500">{stock.name}</div>
                       </div>
                       <div className="max-w-24 truncate rounded bg-slate-800 px-1.5 py-1 text-[8px] font-bold text-slate-500">{stock.sector}</div>
-                    </div>
+                    </button>
                   ))}
                 </div>
                 <div className="border-t border-slate-800 px-4 py-2 text-[9px] text-slate-600">
-                  Showing {visibleStocks.length} instruments · Select a symbol to route it through the system view
+                  Showing {visibleStocks.length} instruments · Select a symbol to load its market data
                 </div>
               </>
             ) : (
               <div className="grid grid-cols-3 gap-px bg-slate-800">
                 {[
                   ["CONSTITUENTS", String(sp500.length)],
-                  ["SECTORS", "11"],
+                  ["SECTORS", String(sectors.length - 1)],
                   ["SELECTION", selectedSymbol],
                 ].map(([label, value]) => (
                   <div key={label} className="bg-slate-900 px-4 py-4 text-center">
@@ -772,7 +1142,10 @@ function App() {
 
         <footer className="flex flex-col gap-2 px-1 py-3 text-[9px] font-medium uppercase tracking-wider text-slate-600 sm:flex-row sm:items-center sm:justify-between">
           <span>TickForge observability console · Controller isolated from matching path</span>
-          <span className="flex items-center gap-2"><span className="size-1.5 rounded-full bg-amber-400" /> Engine offline · Metrics intentionally withheld</span>
+          <span className="flex items-center gap-2">
+            <span className={`size-1.5 rounded-full ${live ? "bg-emerald-400" : "bg-amber-400"}`} />
+            {live ? `Engine ${state} · live metrics` : "Bridge offline · engine panels show sample data"}
+          </span>
         </footer>
       </div>
     </main>

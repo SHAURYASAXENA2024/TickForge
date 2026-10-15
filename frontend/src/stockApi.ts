@@ -20,6 +20,15 @@ export type StockSnapshot = {
   history: PricePoint[];
 };
 
+/** network = API unreachable, http = API answered with an error, contract = unexpected payload */
+export class StockApiError extends Error {
+  kind: "network" | "http" | "contract";
+  constructor(kind: "network" | "http" | "contract", message: string) {
+    super(message);
+    this.kind = kind;
+  }
+}
+
 const API_URL = (import.meta.env.VITE_STOCK_API_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
 
 const isNumber = (value: unknown): value is number =>
@@ -29,21 +38,39 @@ export async function getStockSnapshot(
   symbol: string,
   signal?: AbortSignal,
 ): Promise<StockSnapshot> {
-  const response = await fetch(
-    `${API_URL}/api/stocks/${encodeURIComponent(symbol)}?range=1d&interval=5m`,
-    { signal },
-  );
+  let response: Response;
+  try {
+    response = await fetch(
+      `${API_URL}/api/stocks/${encodeURIComponent(symbol)}?range=1d&interval=5m`,
+      { signal },
+    );
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    throw new StockApiError("network", "Unable to reach the stock API");
+  }
 
   if (!response.ok) {
-    throw new Error(`Stock API returned ${response.status}`);
+    let detail = `Stock API returned ${response.status}`;
+    try {
+      const body: unknown = await response.json();
+      if (body && typeof body === "object" && typeof (body as { detail?: unknown }).detail === "string") {
+        detail = (body as { detail: string }).detail;
+      }
+    } catch {
+      /* keep the generic message */
+    }
+    throw new StockApiError("http", detail);
   }
 
   const data: unknown = await response.json();
 
-  console.log("STOCK API RESPONSE:", data);
-  
-  if (!data || typeof data !== "object") throw new Error("Stock API returned invalid JSON");
-  
+  if (!data || typeof data !== "object") {
+    throw new StockApiError("contract", "Stock API returned invalid JSON");
+  }
+  const errorField = (data as { error?: unknown }).error;
+  if (typeof errorField === "string") {
+    throw new StockApiError("http", errorField);
+  }
 
   const snapshot = data as Partial<StockSnapshot>;
   if (
@@ -58,7 +85,7 @@ export async function getStockSnapshot(
     typeof snapshot.updatedAt !== "string" ||
     !Array.isArray(snapshot.history)
   ) {
-    throw new Error("Stock API response does not match the TickForge contract");
+    throw new StockApiError("contract", "Stock API response does not match the TickForge contract");
   }
 
   const history = snapshot.history.filter(
@@ -73,7 +100,7 @@ export async function getStockSnapshot(
   );
 
   if (history.length === 0) {
-    throw new Error("Stock API returned no valid OHLCV history");
+    throw new StockApiError("contract", "Stock API returned no valid OHLCV history");
   }
 
   return { ...snapshot, history } as StockSnapshot;
