@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { sp500 } from "./sp500";
+import { scrollToSection, useActiveSection, useInView, useSmoothScroll } from "./scroll";
 import { getStockSnapshot, StockApiError, type StockSnapshot } from "./stockApi";
 import { TELEMETRY_URL, useTelemetry, type BookLevel } from "./telemetry";
 
@@ -90,7 +91,7 @@ const badgeLabels = { live: "LIVE", simulated: "SIMULATED", sample: "SAMPLE DATA
 
 function Badge({ kind, label }: { kind: keyof typeof badgeStyles; label?: string }) {
   return (
-    <span className={`rounded border px-1.5 py-1 font-mono text-[9px] font-bold tracking-wider ${badgeStyles[kind]}`}>
+    <span className={`rounded border px-1.5 py-1 font-mono text-[10px] font-bold tracking-wider ${badgeStyles[kind]}`}>
       {label ?? badgeLabels[kind]}
     </span>
   );
@@ -111,8 +112,12 @@ function Panel({
   className?: string;
   action?: React.ReactNode;
 }) {
+  const [ref, shown] = useInView<HTMLElement>();
   return (
-    <section className={`overflow-hidden rounded-xl border border-slate-800 bg-slate-900/70 shadow-xl shadow-black/10 ${className}`}>
+    <section
+      ref={ref}
+      className={`reveal ${shown ? "reveal-in" : ""} overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/70 shadow-xl shadow-black/10 backdrop-blur-sm ${className}`}
+    >
       <div className="flex items-center justify-between gap-2 border-b border-slate-800 px-4 py-3">
         <div className="flex items-center gap-3">
           <div className="grid size-8 place-items-center rounded-lg border border-slate-700 bg-slate-800 text-cyan-400">
@@ -120,7 +125,7 @@ function Panel({
           </div>
           <div>
             <div className="text-xs font-bold uppercase tracking-wider text-slate-200">{title}</div>
-            <div className="mt-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-slate-500">{eyebrow}</div>
+            <div className="mt-0.5 text-[11px] font-medium uppercase tracking-[0.14em] text-slate-500">{eyebrow}</div>
           </div>
         </div>
         {action}
@@ -199,7 +204,7 @@ function PriceChart({ snapshot }: { snapshot: StockSnapshot }) {
               type="button"
               aria-pressed={mode === value}
               onClick={() => setMode(value)}
-              className={`rounded px-2 py-1 text-[9px] font-bold uppercase tracking-wider transition ${mode === value ? "bg-slate-700 text-white" : "text-slate-500 hover:text-slate-300"}`}
+              className={`rounded px-2 py-1 text-[10px] font-bold uppercase tracking-wider transition ${mode === value ? "bg-slate-700 text-white" : "text-slate-500 hover:text-slate-300"}`}
             >
               {value}
             </button>
@@ -207,8 +212,8 @@ function PriceChart({ snapshot }: { snapshot: StockSnapshot }) {
         </div>
 
         <div className="pointer-events-none absolute right-3 top-3 z-10 text-right font-mono">
-          <div className="text-[9px] text-slate-600">SESSION HIGH</div>
-          <div className="text-[10px] font-bold text-slate-400">{snapshot.currency} {maximum.toFixed(2)}</div>
+          <div className="text-[10px] text-slate-600">SESSION HIGH</div>
+          <div className="text-[11px] font-bold text-slate-400">{snapshot.currency} {maximum.toFixed(2)}</div>
         </div>
 
         <svg className="pointer-events-none absolute inset-x-3 bottom-7 top-10 h-[calc(100%-4.25rem)] w-[calc(100%-1.5rem)] overflow-visible" viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label={`${snapshot.symbol} intraday ${mode === "candles" ? "candlestick" : "price"} chart`}>
@@ -246,7 +251,7 @@ function PriceChart({ snapshot }: { snapshot: StockSnapshot }) {
           <>
             <div className="pointer-events-none absolute bottom-7 top-10 w-px bg-slate-500/60" style={{ left: `calc(12px + (100% - 24px) * ${hover.frac})` }} />
             <div
-              className="pointer-events-none absolute top-12 z-30 min-w-36 rounded-md border border-slate-700 bg-slate-900/95 px-2.5 py-2 font-mono text-[10px] shadow-xl"
+              className="pointer-events-none absolute top-12 z-30 min-w-36 rounded-md border border-slate-700 bg-slate-900/95 px-2.5 py-2 font-mono text-[11px] shadow-xl"
               style={hover.frac > 0.55 ? { right: "calc(100% - 12px - (100% - 24px) * " + hover.frac + " + 8px)" } : { left: `calc(12px + (100% - 24px) * ${hover.frac} + 8px)` }}
             >
               <div className="mb-1 font-bold text-slate-200">{fmtTime(hovered.timestamp)}</div>
@@ -261,12 +266,12 @@ function PriceChart({ snapshot }: { snapshot: StockSnapshot }) {
           </>
         )}
 
-        <div className="pointer-events-none absolute inset-x-3 bottom-2 flex justify-between font-mono text-[9px] text-slate-600">
+        <div className="pointer-events-none absolute inset-x-3 bottom-2 flex justify-between font-mono text-[10px] text-slate-600">
           <span>{firstTime}</span>
           <span>{lastTime}</span>
         </div>
       </div>
-      <div className="mt-2 flex items-center justify-between text-[9px] text-slate-600">
+      <div className="mt-2 flex items-center justify-between text-[10px] text-slate-600">
         <span>{n} OHLCV samples · hover for details</span>
         <span>Range {snapshot.currency} {minimum.toFixed(2)} — {maximum.toFixed(2)}</span>
       </div>
@@ -335,10 +340,148 @@ const roadmap = [
 
 const LAT_BUCKETS_SHOWN = 16;
 
+function Reveal({ children, className = "", delay = 0 }: { children: React.ReactNode; className?: string; delay?: number }) {
+  const [ref, shown] = useInView<HTMLDivElement>();
+  return (
+    <div ref={ref} style={shown && delay ? { transitionDelay: `${delay}ms` } : undefined} className={`reveal ${shown ? "reveal-in" : ""} ${className}`}>
+      {children}
+    </div>
+  );
+}
+
+function SectionHead({ title, text, aside }: { title: string; text: string; aside?: React.ReactNode }) {
+  return (
+    <Reveal className="mb-6 flex flex-wrap items-end justify-between gap-4">
+      <div>
+        <h2 className="text-3xl font-black tracking-tight text-white sm:text-4xl">{title}</h2>
+        <p className="mt-2 max-w-xl text-sm text-slate-400">{text}</p>
+      </div>
+      {aside}
+    </Reveal>
+  );
+}
+
+const navSections = [
+  { id: "overview", label: "Overview" },
+  { id: "engine", label: "Engine" },
+  { id: "market", label: "Market" },
+  { id: "how", label: "How it works" },
+];
+const navIds = navSections.map((section) => section.id);
+
+const flowSteps = [
+  { title: "Producers submit orders", body: "Four threads create buy and sell orders and hand them to the queue. No thread ever waits on a lock.", planned: false },
+  { title: "The MPSC queue collects them", body: "Many producers, one consumer. A lock-free queue lets every thread enqueue without blocking the others.", planned: false },
+  { title: "One matcher thread decides", body: "A single thread takes orders in arrival order, so results are repeatable and the book needs no locks.", planned: false },
+  { title: "The order book updates", body: "Best price first, oldest order first at the same price. Unmatched quantity rests on the book.", planned: false },
+  { title: "A trade event is emitted", body: "Each match becomes a trade with a price, a quantity and both order IDs. This is what the console streams.", planned: false },
+  { title: "Storage is the next milestone", body: "A write-ahead log and an LSM-tree are planned so trades survive a crash. They are not built yet.", planned: true },
+];
+
+// Pinned scroll story: the stage stays on screen while scroll progress walks through the order's journey.
+function PinnedFlow() {
+  const trackRef = useRef<HTMLElement>(null);
+  const [progress, setProgress] = useState(0);
+
+  useEffect(() => {
+    let frame = 0;
+    const update = () => {
+      frame = 0;
+      const el = trackRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      const span = rect.height - window.innerHeight;
+      const value = span > 0 ? Math.min(1, Math.max(0, -rect.top / span)) : 0;
+      setProgress(Math.round(value * 1000) / 1000);
+    };
+    const onScroll = () => {
+      if (!frame) frame = requestAnimationFrame(update);
+    };
+    update();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onScroll);
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("resize", onScroll);
+      cancelAnimationFrame(frame);
+    };
+  }, []);
+
+  const step = Math.min(flowSteps.length - 1, Math.floor(progress * flowSteps.length));
+  const lastLit = flowSteps[step].planned ? stages.length - 1 : step;
+
+  return (
+    <section id="how" ref={trackRef} className="relative scroll-mt-16" style={{ height: `${flowSteps.length * 60 + 100}vh` }}>
+      <div className="sticky top-16 flex h-[calc(100vh-4rem)] items-center">
+        <div className="mx-auto grid w-full max-w-[1500px] items-center gap-8 px-4 lg:grid-cols-[1.1fr_1fr] lg:gap-16 lg:px-8">
+          <div>
+            <div className="text-xs font-bold tracking-wide text-cyan-400">How it works · scroll to follow one order</div>
+            <div className="relative mt-6 min-h-72">
+              {flowSteps.map((item, index) => (
+                <div
+                  key={item.title}
+                  aria-hidden={index !== step}
+                  className={`absolute inset-0 transition-all duration-500 motion-reduce:transition-none ${
+                    index === step ? "translate-y-0 opacity-100" : index < step ? "-translate-y-6 opacity-0" : "translate-y-6 opacity-0"
+                  }`}
+                >
+                  <div className="font-mono text-sm text-slate-500">Step {index + 1} of {flowSteps.length}</div>
+                  <h2 className="mt-3 text-3xl font-black leading-tight tracking-tight text-white sm:text-5xl">{item.title}</h2>
+                  <p className="mt-4 max-w-xl text-base leading-relaxed text-slate-400">{item.body}</p>
+                  {item.planned && <div className="mt-4"><Badge kind="planned" /></div>}
+                </div>
+              ))}
+            </div>
+            <div className="h-1 w-full max-w-xs overflow-hidden rounded bg-slate-800">
+              <div className="h-full bg-gradient-to-r from-cyan-500 to-blue-400" style={{ width: `${progress * 100}%` }} />
+            </div>
+            <div className="mt-2 text-[11px] text-slate-600">Illustrative walkthrough · not live data</div>
+          </div>
+
+          <ol className="relative space-y-2.5">
+            <div className="absolute bottom-7 left-[27px] top-7 w-px bg-slate-800">
+              <div className="w-full bg-gradient-to-b from-cyan-500 to-blue-400" style={{ height: `${progress * 100}%` }} />
+            </div>
+            {stages.map((stage, index) => {
+              const lit = index <= lastLit;
+              const current = index === (flowSteps[step].planned ? 5 : step);
+              return (
+                <li
+                  key={stage.label}
+                  className={`relative flex items-center gap-4 rounded-xl border px-3 py-2.5 transition-all duration-500 motion-reduce:transition-none ${
+                    stage.planned ? "border-dashed" : ""
+                  } ${
+                    current
+                      ? "scale-[1.02] border-cyan-400/60 bg-cyan-400/10 shadow-lg shadow-cyan-500/10"
+                      : lit
+                        ? "border-slate-700 bg-slate-900/70"
+                        : "border-slate-800/70 bg-transparent opacity-50"
+                  }`}
+                >
+                  <div className={`grid size-8 shrink-0 place-items-center rounded-lg ${current ? "bg-cyan-400 text-slate-950" : lit ? "bg-slate-800 text-cyan-400" : "bg-slate-900 text-slate-600"}`}>
+                    <Icon name={stage.icon} />
+                  </div>
+                  <div>
+                    <div className="text-xs font-black tracking-wide text-slate-200">{stage.label}</div>
+                    <div className={`font-mono text-[11px] ${stage.planned ? "text-blue-400/80" : "text-slate-500"}`}>{stage.meta}</div>
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+
 function App() {
   // ---- engine link (WebSocket bridge) ----------------------------------
   const { link, engineState, engineError, stats, trades, send } = useTelemetry();
   const live = link === "live";
+  useSmoothScroll();
+  const activeSection = useActiveSection(navIds);
 
   // ---- run controls ------------------------------------------------------
   const [simState, setSimState] = useState<RunState>("closed");
@@ -511,7 +654,7 @@ function App() {
     ["QUEUE DEPTH", hasLiveData ? fmtInt(stats.queueDepth) : dash, "layers"],
     ["CPU", hasLiveData ? `${stats.cpuPct.toFixed(0)}%` : dash, "cpu"],
     ["MEMORY", hasLiveData && stats.rssMb > 0 ? `${stats.rssMb.toFixed(1)} MB` : dash, "server"],
-    ["CAS RETRIES", "n/a", "activity"],
+    ["THREADS", hasLiveData ? String(stats.threads) : dash, "cpu"],
   ];
 
   const producerRows = hasLiveData
@@ -525,111 +668,105 @@ function App() {
     : sampleTraders;
 
   return (
-    <main className="min-h-screen bg-slate-950 text-slate-300 selection:bg-cyan-400/30">
-      <div className="mx-auto max-w-[1800px] px-4 py-4 lg:px-6">
-        <header className="mb-4 rounded-xl border border-slate-800 bg-slate-900/90 shadow-2xl shadow-black/20">
-          <div className="flex flex-col gap-4 px-4 py-3.5 xl:flex-row xl:items-center xl:justify-between">
-            <div className="flex items-center gap-3">
-              <div className="relative grid size-10 place-items-center overflow-hidden rounded-lg bg-cyan-400 text-slate-950">
-                <Icon name="activity" size="lg" />
-                <div className="absolute inset-x-0 bottom-0 h-1 bg-emerald-400" />
-              </div>
-              <div>
-                <div className="flex items-baseline gap-2">
-                  <div className="text-lg font-black tracking-tight text-white">TICKFORGE</div>
-                  <div className="rounded bg-slate-800 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-widest text-slate-400">MVP</div>
+    <main className="relative isolate min-h-screen bg-slate-950 text-slate-300 selection:bg-cyan-400/30">
+      <div className="scroll-progress" aria-hidden="true" />
+      <div className="bg-blob blob-a" aria-hidden="true" />
+      <div className="bg-blob blob-b" aria-hidden="true" />
+
+      <header className="sticky top-0 z-50 border-b border-slate-800/80 bg-slate-950/70 backdrop-blur-xl">
+        <div className="mx-auto flex max-w-[1500px] flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2.5 lg:px-8">
+          <button type="button" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })} className="flex items-center gap-2.5 text-left" aria-label="Back to top">
+            <div className="relative grid size-9 place-items-center overflow-hidden rounded-lg bg-gradient-to-br from-cyan-400 to-blue-400 text-slate-950">
+              <Icon name="activity" size="lg" />
+            </div>
+            <div>
+              <div className="bg-gradient-to-r from-cyan-300 to-blue-400 bg-clip-text text-base font-black leading-none tracking-tight text-transparent">TICKFORGE</div>
+              <div className="mt-1 text-[10px] font-semibold tracking-wide text-slate-500">Exchange systems console</div>
+            </div>
+          </button>
+
+          <nav aria-label="Sections" className="ml-2 hidden items-center gap-1 lg:flex">
+            {navSections.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                aria-current={activeSection === item.id ? "true" : undefined}
+                onClick={() => scrollToSection(item.id)}
+                className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${activeSection === item.id ? "bg-slate-800 text-white" : "text-slate-500 hover:text-slate-300"}`}
+              >
+                {item.label}
+              </button>
+            ))}
+          </nav>
+
+          <div className="ml-auto flex flex-wrap items-center gap-2">
+            <div title={linkLabel} className={`flex max-w-64 items-center gap-2 rounded-lg border border-slate-800 bg-slate-900/70 px-3 py-2 text-xs font-semibold ${link === "live" ? "text-emerald-400" : link === "connecting" ? "text-amber-400" : "text-slate-400"}`}>
+              <span className={`size-2 shrink-0 rounded-full ${link === "live" ? "bg-emerald-400" : link === "connecting" ? "animate-pulse bg-amber-400" : "bg-rose-400"}`} />
+              <span className="truncate">{link === "live" ? "Engine bridge live" : link === "connecting" ? "Connecting…" : "Bridge offline · simulation"}</span>
+              {engineError && <span className="truncate text-rose-400">· {engineError}</span>}
+            </div>
+            <div className={`hidden items-center gap-2 rounded-lg border px-3 py-2 text-xs font-bold sm:flex ${online ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400" : "border-slate-700 bg-slate-800 text-slate-400"}`}>
+              <span className={`size-2 rounded-full ${state === "running" ? "animate-pulse bg-emerald-400" : "bg-slate-500"}`} />
+              MARKET {state === "running" ? "OPEN" : state === "paused" ? "PAUSED" : "CLOSED"}
+            </div>
+            <Action label="Start" icon="play" active={state === "running"} onClick={() => control("start")} />
+            <Action label="Pause" icon="pause" disabled={state !== "running"} onClick={() => control("pause")} />
+            <Action label="Stop" icon="stop" disabled={!online} onClick={() => control("stop")} />
+            <Action label="Reset" icon="reset" onClick={() => control("reset")} />
+          </div>
+        </div>
+      </header>
+
+      <div className="mx-auto max-w-[1500px] px-4 lg:px-8">
+        <section id="overview" className="scroll-mt-24 pb-16 pt-10">
+          <SectionHead
+            title="Overview"
+            text="A live look at the exchange engine. Start it to stream real orders, or use simulation mode while the bridge is offline."
+            aside={
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex items-center gap-3 rounded-lg border border-slate-800 bg-slate-950/70 px-3 py-2 font-mono" title="Simulated market clock">
+                  <span className="text-[10px] font-bold tracking-wider text-slate-600">SIM</span>
+                  <span className="text-xs text-slate-500">{today}</span>
+                  <span className="text-sm font-bold tabular-nums text-white">{marketTime}</span>
                 </div>
-                <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">Exchange systems digital twin</div>
-              </div>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2 xl:justify-center">
-              <div className="flex items-center gap-3 rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 font-mono" title="Simulated market clock">
-                <span className="text-[9px] font-bold tracking-wider text-slate-600">SIM</span>
-                <span className="text-xs text-slate-500">{today}</span>
-                <span className="text-sm font-bold tabular-nums text-white">{marketTime}</span>
-              </div>
-              <div className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-bold ${online ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400" : "border-slate-700 bg-slate-800 text-slate-400"}`}>
-                <span className={`size-2 rounded-full ${state === "running" ? "animate-pulse bg-emerald-400" : "bg-slate-500"}`} />
-                MARKET {state === "running" ? "OPEN" : state === "paused" ? "PAUSED" : "CLOSED"}
-              </div>
-              <div className="flex rounded-lg border border-slate-800 bg-slate-950 p-1" role="group" aria-label="Simulation speed">
-                {([1, 10, 100] as const).map((value) => (
-                  <button
-                    key={value}
-                    type="button"
-                    aria-pressed={speed === value}
-                    onClick={() => changeSpeed(value)}
-                    className={`cursor-pointer rounded px-2.5 py-1.5 text-[11px] font-bold transition ${speed === value ? "bg-slate-700 text-white" : "text-slate-500 hover:text-slate-300"}`}
-                  >
-                    {value}x
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <Action label="Start" icon="play" active={state === "running"} onClick={() => control("start")} />
-              <Action label="Pause" icon="pause" disabled={state !== "running"} onClick={() => control("pause")} />
-              <Action label="Stop" icon="stop" disabled={!online} onClick={() => control("stop")} />
-              <Action label="Reset" icon="reset" onClick={() => control("reset")} />
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-2 border-t border-slate-800 px-4 py-2 text-[10px]">
-            <span className={`size-1.5 rounded-full ${link === "live" ? "bg-emerald-400" : link === "connecting" ? "animate-pulse bg-amber-400" : "bg-rose-400"}`} />
-            <span className={`font-bold uppercase tracking-wider ${link === "live" ? "text-emerald-400" : link === "connecting" ? "text-amber-400" : "text-rose-400"}`}>Telemetry bridge</span>
-            <span className="text-slate-600">/</span>
-            <span className="text-slate-500">{linkLabel}</span>
-            {engineError && <span className="font-semibold text-rose-400">· {engineError}</span>}
-          </div>
-        </header>
-
-        <div className="grid grid-cols-12 gap-4">
-          <Panel
-            title={hasLiveData ? "Order Producers" : "Virtual Traders"}
-            eyebrow={hasLiveData ? `Engine workload · ${producerRows.length} producer threads` : `Sample workload generators · ${producerRows.length}`}
-            icon="traders"
-            className="col-span-12 xl:col-span-3"
-            action={<Badge kind={hasLiveData ? "live" : "sample"} />}
-          >
-            <div className="grid grid-cols-[1fr_auto_auto] border-b border-slate-800 px-4 py-2 text-[9px] font-bold uppercase tracking-wider text-slate-600">
-              <span>{hasLiveData ? "Producer" : "Trader"} / Strategy</span><span>Intent</span><span className="ml-5">{hasLiveData ? "Orders" : "Position"}</span>
-            </div>
-            <div className="divide-y divide-slate-800/80">
-              {producerRows.map((row) => (
-                <div key={row.id} className="grid grid-cols-[1fr_auto_auto] items-center px-4 py-2.5 transition hover:bg-slate-800/40">
-                  <div className="flex items-center gap-2.5">
-                    <span className={`size-1.5 rounded-full ${state === "running" && hasLiveData ? `${row.dot} animate-pulse` : "bg-slate-600"}`} />
-                    <div>
-                      <div className="font-mono text-[11px] font-bold text-slate-200">{row.id}</div>
-                      <div className="text-[10px] text-slate-500">{row.strategy}</div>
-                    </div>
+                <div className="flex rounded-lg border border-slate-800 bg-slate-950/70 p-1" role="group" aria-label="Simulation speed">
+                  {([1, 10, 100] as const).map((value) => (
+                    <button
+                      key={value}
+                      type="button"
+                      aria-pressed={speed === value}
+                      onClick={() => changeSpeed(value)}
+                      className={`cursor-pointer rounded px-2.5 py-1.5 text-xs font-bold transition ${speed === value ? "bg-slate-700 text-white" : "text-slate-500 hover:text-slate-300"}`}
+                    >
+                      {value}x
+                    </button>
+                  ))}
+                </div>
+              </div>}
+          />
+          <div className="grid grid-cols-12 items-start gap-5">
+            <Reveal className="col-span-12">
+              <section className="col-span-12 overflow-hidden rounded-xl border border-slate-800 bg-slate-900/70">
+            <div className="grid grid-cols-2 divide-x divide-y divide-slate-800 md:grid-cols-4 xl:grid-cols-8 xl:divide-y-0">
+              {metrics.map(([label, value, icon]) => (
+                <div key={label} className="group px-4 py-3 transition hover:bg-slate-800/40">
+                  <div className="mb-2 flex items-center justify-between text-slate-600 group-hover:text-cyan-400">
+                    <Icon name={icon} size="sm" />
+                    <span className={`size-1.5 rounded-full ${hasLiveData ? "bg-emerald-400" : "bg-slate-700"}`} />
                   </div>
-                  <span className={`rounded border px-1.5 py-1 font-mono text-[9px] font-bold ${row.side === "BUY" ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-400" : row.side === "SELL" ? "border-rose-500/20 bg-rose-500/10 text-rose-400" : "border-slate-700 bg-slate-800 text-slate-400"}`}>{row.side}</span>
-                  <span className="ml-5 font-mono text-[11px] text-slate-400">{row.count}</span>
+                  <div className="font-mono text-lg font-black text-slate-300">{value}</div>
+                  <div className="text-[10px] font-bold tracking-wider text-slate-600">{label}</div>
                 </div>
               ))}
             </div>
-            <div className="grid grid-cols-3 border-t border-slate-800 bg-slate-950/40">
-              {[
-                ["ORDERS", hasLiveData ? fmtInt(stats.submitted) : dash],
-                ["TRADES", hasLiveData ? fmtInt(stats.tradesTotal) : dash],
-                ["IN QUEUE", hasLiveData ? fmtInt(stats.queueDepth) : dash],
-              ].map(([label, value]) => (
-                <div key={label} className="border-r border-slate-800 px-3 py-2.5 text-center last:border-r-0">
-                  <div className="font-mono text-sm font-bold text-slate-300">{value}</div>
-                  <div className="text-[9px] font-bold tracking-wider text-slate-600">{label}</div>
-                </div>
-              ))}
-            </div>
-          </Panel>
-
-          <Panel
+          </section>
+            </Reveal>
+            <Panel
             title="Live Order Trace"
             eyebrow="End-to-end event pipeline"
             icon="activity"
-            className="col-span-12 xl:col-span-9"
-            action={<div className="flex items-center gap-2"><Badge kind="simulated" label="ILLUSTRATIVE ANIMATION" /><div className="flex items-center gap-2 rounded-md bg-slate-950 px-2.5 py-1.5 font-mono text-[10px] text-slate-500"><span className="size-1.5 rounded-full bg-cyan-400" /> TRACE MODE</div></div>}
+            className="col-span-12 xl:col-span-8"
+            action={<div className="flex items-center gap-2"><Badge kind="simulated" label="ILLUSTRATIVE ANIMATION" /><div className="flex items-center gap-2 rounded-md bg-slate-950 px-2.5 py-1.5 font-mono text-[11px] text-slate-500"><span className="size-1.5 rounded-full bg-cyan-400" /> TRACE MODE</div></div>}
           >
             <div className="p-4">
               <div className="mb-4 flex items-center justify-between rounded-lg border border-cyan-500/20 bg-cyan-500/5 px-3 py-2.5">
@@ -647,7 +784,7 @@ function App() {
                     )}
                   </div>
                 </div>
-                <div className="hidden font-mono text-[10px] text-slate-600 sm:block">{live ? "Live engine event" : "Waiting for telemetry"}</div>
+                <div className="hidden font-mono text-[11px] text-slate-600 sm:block">{live ? "Live engine event" : "Waiting for telemetry"}</div>
               </div>
 
               <div className="relative overflow-x-auto pb-2">
@@ -662,8 +799,8 @@ function App() {
                         <div className={`grid size-14 place-items-center rounded-xl border-2 transition-all duration-300 ${stage.planned ? "border-dashed border-slate-700 bg-slate-900/40 text-slate-600" : active ? "scale-110 border-cyan-400 bg-cyan-400 text-slate-950 shadow-lg shadow-cyan-500/30" : complete ? "border-cyan-500/50 bg-slate-900 text-cyan-400" : "border-slate-700 bg-slate-900 text-slate-500"}`}>
                           <Icon name={stage.icon} size="lg" />
                         </div>
-                        <div className={`mt-2 text-[9px] font-black tracking-wide ${active ? "text-cyan-400" : stage.planned ? "text-slate-600" : "text-slate-400"}`}>{stage.label}</div>
-                        <div className={`mt-0.5 font-mono text-[9px] ${stage.planned ? "text-blue-400/70" : "text-slate-600"}`}>{stage.meta}</div>
+                        <div className={`mt-2 text-[10px] font-black tracking-wide ${active ? "text-cyan-400" : stage.planned ? "text-slate-600" : "text-slate-400"}`}>{stage.label}</div>
+                        <div className={`mt-0.5 font-mono text-[10px] ${stage.planned ? "text-blue-400/70" : "text-slate-600"}`}>{stage.meta}</div>
                       </div>
                     );
                   })}
@@ -678,60 +815,72 @@ function App() {
                 ["RESULT", lastTrade ? `${lastTrade.qty} @ ${lastTrade.price.toFixed(2)}` : "Awaiting event"],
               ].map(([label, value]) => (
                 <div key={label} className="border-r border-slate-800 px-4 py-3 last:border-r-0">
-                  <div className="text-[9px] font-bold uppercase tracking-wider text-slate-600">{label}</div>
-                  <div className="mt-1 font-mono text-[11px] font-semibold text-slate-300">{value}</div>
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-slate-600">{label}</div>
+                  <div className="mt-1 font-mono text-[12px] font-semibold text-slate-300">{value}</div>
                 </div>
               ))}
             </div>
           </Panel>
-
-          <Panel
-            title="OS & Concurrency"
-            eyebrow="Process telemetry"
-            icon="cpu"
-            className="col-span-12 lg:col-span-5 xl:col-span-3"
-            action={<Badge kind={hasLiveData ? "live" : "sample"} label={hasLiveData ? "LIVE" : "NO DATA"} />}
+            <Panel
+            title={hasLiveData ? "Order Producers" : "Virtual Traders"}
+            eyebrow={hasLiveData ? `Engine workload · ${producerRows.length} producer threads` : `Sample workload generators · ${producerRows.length}`}
+            icon="traders"
+            className="col-span-12 xl:col-span-4"
+            action={<Badge kind={hasLiveData ? "live" : "sample"} />}
           >
-            <div className="grid grid-cols-2 gap-px bg-slate-800">
-              {[
-                ["WORKER THREADS", hasLiveData ? String(stats.threads) : dash, "4 producers + 1 matcher"],
-                ["CPU UTIL.", hasLiveData ? `${stats.cpuPct.toFixed(0)}%` : dash, "whole process (matcher busy-polls)"],
-                ["QUEUE DEPTH", hasLiveData ? fmtInt(stats.queueDepth) : dash, "submitted − processed"],
-                ["PUSH / POP", hasLiveData ? fmtInt(stats.ordersPerSec) : dash, "orders/sec processed"],
-              ].map(([label, value, meta]) => (
-                <div key={label} className="bg-slate-900 px-4 py-3">
-                  <div className="text-[9px] font-bold tracking-wider text-slate-600">{label}</div>
-                  <div className="mt-1 font-mono text-xl font-bold text-slate-200">{value}</div>
-                  <div className="text-[9px] text-slate-500">{meta}</div>
+            <div className="grid grid-cols-[1fr_auto_auto] border-b border-slate-800 px-4 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-600">
+              <span>{hasLiveData ? "Producer" : "Trader"} / Strategy</span><span>Intent</span><span className="ml-5">{hasLiveData ? "Orders" : "Position"}</span>
+            </div>
+            <div className="divide-y divide-slate-800/80">
+              {producerRows.map((row) => (
+                <div key={row.id} className="grid grid-cols-[1fr_auto_auto] items-center px-4 py-2.5 transition hover:bg-slate-800/40">
+                  <div className="flex items-center gap-2.5">
+                    <span className={`size-1.5 rounded-full ${state === "running" && hasLiveData ? `${row.dot} animate-pulse` : "bg-slate-600"}`} />
+                    <div>
+                      <div className="font-mono text-[12px] font-bold text-slate-200">{row.id}</div>
+                      <div className="text-[11px] text-slate-500">{row.strategy}</div>
+                    </div>
+                  </div>
+                  <span className={`rounded border px-1.5 py-1 font-mono text-[10px] font-bold ${row.side === "BUY" ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-400" : row.side === "SELL" ? "border-rose-500/20 bg-rose-500/10 text-rose-400" : "border-slate-700 bg-slate-800 text-slate-400"}`}>{row.side}</span>
+                  <span className="ml-5 font-mono text-[12px] text-slate-400">{row.count}</span>
                 </div>
               ))}
             </div>
-            <div className="space-y-3 px-4 py-3.5">
-              {[["CAS Attempts", "not instrumented"], ["CAS Success", "not instrumented"], ["CAS Retries", "not instrumented"], ["Thread Affinity", "not instrumented"]].map(([label, value]) => (
-                <div key={label} className="flex items-center justify-between text-[11px]">
-                  <span className="text-slate-500">{label}</span>
-                  <span className="font-mono font-semibold text-slate-500">{value}</span>
+            <div className="grid grid-cols-3 border-t border-slate-800 bg-slate-950/40">
+              {[
+                ["ORDERS", hasLiveData ? fmtInt(stats.submitted) : dash],
+                ["TRADES", hasLiveData ? fmtInt(stats.tradesTotal) : dash],
+                ["IN QUEUE", hasLiveData ? fmtInt(stats.queueDepth) : dash],
+              ].map(([label, value]) => (
+                <div key={label} className="border-r border-slate-800 px-3 py-2.5 text-center last:border-r-0">
+                  <div className="font-mono text-sm font-bold text-slate-300">{value}</div>
+                  <div className="text-[10px] font-bold tracking-wider text-slate-600">{label}</div>
                 </div>
               ))}
             </div>
           </Panel>
+          </div>
+        </section>
 
-          <Panel
+        <section id="engine" className="scroll-mt-24 pb-16">
+          <SectionHead title="Engine" text="The order book, the trades it produces, and how long each order waited in the queue." />
+          <div className="grid grid-cols-12 items-start gap-5">
+            <Panel
             title="Matching Engine"
             eyebrow="Price-time priority · SYM-1 (synthetic)"
             icon="book"
-            className="col-span-12 lg:col-span-7 xl:col-span-5"
+            className="col-span-12 xl:col-span-7"
             action={<Badge kind={hasLiveData ? "live" : "sample"} />}
           >
             <div className="grid grid-cols-[1fr_auto_1fr]">
               <div className="px-4 py-3">
-                <div className="mb-2 flex items-center justify-between text-[9px] font-bold uppercase tracking-wider">
+                <div className="mb-2 flex items-center justify-between text-[10px] font-bold uppercase tracking-wider">
                   <span className="text-rose-400">Sell / Ask</span><span className="text-slate-600">Qty</span>
                 </div>
                 <div className="space-y-1">
-                  {asks.length === 0 && <div className="py-2 font-mono text-[10px] text-slate-600">No resting asks</div>}
+                  {asks.length === 0 && <div className="py-2 font-mono text-[11px] text-slate-600">No resting asks</div>}
                   {asks.map((level) => (
-                    <div key={level.price} className="relative flex items-center justify-between overflow-hidden rounded px-2 py-1.5 font-mono text-[11px]">
+                    <div key={level.price} className="relative flex items-center justify-between overflow-hidden rounded px-2 py-1.5 font-mono text-[12px]">
                       <div className="absolute inset-y-0 right-0 bg-rose-500/10" style={{ width: `${(level.qty / maxQty) * 100}%` }} />
                       <span className="relative font-semibold text-rose-400">${level.price.toFixed(2)}</span><span className="relative text-slate-400">{fmtInt(level.qty)}</span>
                     </div>
@@ -740,13 +889,13 @@ function App() {
               </div>
               <div className="w-px bg-slate-800" />
               <div className="px-4 py-3">
-                <div className="mb-2 flex items-center justify-between text-[9px] font-bold uppercase tracking-wider">
+                <div className="mb-2 flex items-center justify-between text-[10px] font-bold uppercase tracking-wider">
                   <span className="text-emerald-400">Buy / Bid</span><span className="text-slate-600">Qty</span>
                 </div>
                 <div className="space-y-1">
-                  {bids.length === 0 && <div className="py-2 font-mono text-[10px] text-slate-600">No resting bids</div>}
+                  {bids.length === 0 && <div className="py-2 font-mono text-[11px] text-slate-600">No resting bids</div>}
                   {bids.map((level) => (
-                    <div key={level.price} className="relative flex items-center justify-between overflow-hidden rounded px-2 py-1.5 font-mono text-[11px]">
+                    <div key={level.price} className="relative flex items-center justify-between overflow-hidden rounded px-2 py-1.5 font-mono text-[12px]">
                       <div className="absolute inset-y-0 left-0 bg-emerald-500/10" style={{ width: `${(level.qty / maxQty) * 100}%` }} />
                       <span className="relative font-semibold text-emerald-400">${level.price.toFixed(2)}</span><span className="relative text-slate-400">{fmtInt(level.qty)}</span>
                     </div>
@@ -756,25 +905,25 @@ function App() {
             </div>
             <div className="flex items-center justify-between border-t border-slate-800 bg-slate-950/50 px-4 py-3">
               <div>
-                <div className="text-[9px] font-bold uppercase tracking-wider text-slate-600">Spread</div>
+                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-600">Spread</div>
                 <div className="font-mono text-xs font-bold text-amber-400">{spread !== null ? `$${spread.toFixed(2)}` : dash}</div>
               </div>
               <div className="text-center">
-                <div className="text-[9px] font-bold uppercase tracking-wider text-slate-600">Last trade</div>
+                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-600">Last trade</div>
                 <div className="font-mono text-xs font-bold text-slate-300">{lastTrade ? `$${lastTrade.price.toFixed(2)}` : "No trades"}</div>
               </div>
               <div className="text-right">
-                <div className="text-[9px] font-bold uppercase tracking-wider text-slate-600">Matched</div>
+                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-600">Matched</div>
                 <div className="font-mono text-xs font-bold text-slate-300">{hasLiveData ? fmtInt(stats.tradesTotal) : dash}</div>
               </div>
             </div>
 
             <div className="border-t border-slate-800 px-4 py-3">
-              <div className="mb-2 text-[9px] font-bold uppercase tracking-wider text-slate-600">Trade tape</div>
+              <div className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-600">Trade tape</div>
               {trades.length === 0 ? (
-                <div className="font-mono text-[10px] text-slate-600">{live ? "No trades yet" : "Connect the bridge and start the engine"}</div>
+                <div className="font-mono text-[11px] text-slate-600">{live ? "No trades yet" : "Connect the bridge and start the engine"}</div>
               ) : (
-                <div className="max-h-28 space-y-0.5 overflow-y-auto font-mono text-[10px]">
+                <div className="max-h-28 space-y-0.5 overflow-y-auto font-mono text-[11px]">
                   {trades.slice(0, 8).map((trade) => (
                     <div key={trade.id} className="flex justify-between text-slate-400">
                       <span className="text-slate-600">#{trade.id}</span>
@@ -789,8 +938,8 @@ function App() {
 
             <div className="border-t border-slate-800 px-4 py-3">
               <div className="mb-2 flex items-center justify-between">
-                <div className="text-[9px] font-bold uppercase tracking-wider text-slate-600">Order ticket</div>
-                {!(live && state === "running") && <span className="text-[9px] text-slate-600">Start the engine (live link) to place orders</span>}
+                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-600">Order ticket</div>
+                {!(live && state === "running") && <span className="text-[10px] text-slate-600">Start the engine (live link) to place orders</span>}
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <div className="flex rounded-md border border-slate-800 bg-slate-950 p-0.5" role="group" aria-label="Order side">
@@ -800,135 +949,33 @@ function App() {
                       type="button"
                       aria-pressed={ticketSide === side}
                       onClick={() => setTicketSide(side)}
-                      className={`rounded px-3 py-1.5 text-[10px] font-bold transition ${ticketSide === side ? (side === "BUY" ? "bg-emerald-400 text-slate-950" : "bg-rose-400 text-slate-950") : "text-slate-500 hover:text-slate-300"}`}
+                      className={`rounded px-3 py-1.5 text-[11px] font-bold transition ${ticketSide === side ? (side === "BUY" ? "bg-emerald-400 text-slate-950" : "bg-rose-400 text-slate-950") : "text-slate-500 hover:text-slate-300"}`}
                     >
                       {side}
                     </button>
                   ))}
                 </div>
-                <label className="flex items-center gap-1.5 text-[10px] text-slate-500">
+                <label className="flex items-center gap-1.5 text-[11px] text-slate-500">
                   Qty
-                  <input value={ticketQty} onChange={(event) => setTicketQty(event.target.value)} inputMode="numeric" className="w-20 rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 font-mono text-[11px] text-slate-200 outline-none focus:border-cyan-400" />
+                  <input value={ticketQty} onChange={(event) => setTicketQty(event.target.value)} inputMode="numeric" className="w-20 rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 font-mono text-[12px] text-slate-200 outline-none focus:border-cyan-400" />
                 </label>
-                <label className="flex items-center gap-1.5 text-[10px] text-slate-500">
+                <label className="flex items-center gap-1.5 text-[11px] text-slate-500">
                   Price
-                  <input value={ticketPrice} onChange={(event) => setTicketPrice(event.target.value)} inputMode="decimal" className="w-24 rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 font-mono text-[11px] text-slate-200 outline-none focus:border-cyan-400" />
+                  <input value={ticketPrice} onChange={(event) => setTicketPrice(event.target.value)} inputMode="decimal" className="w-24 rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 font-mono text-[12px] text-slate-200 outline-none focus:border-cyan-400" />
                 </label>
                 <button
                   type="button"
                   disabled={!(live && state === "running")}
                   onClick={submitOrder}
-                  className="rounded-md border border-cyan-400 bg-cyan-400 px-3 py-1.5 text-[10px] font-bold text-slate-950 transition hover:bg-cyan-300 disabled:cursor-not-allowed disabled:border-slate-800 disabled:bg-slate-900 disabled:text-slate-600"
+                  className="rounded-md border border-cyan-400 bg-cyan-400 px-3 py-1.5 text-[11px] font-bold text-slate-950 transition hover:bg-cyan-300 disabled:cursor-not-allowed disabled:border-slate-800 disabled:bg-slate-900 disabled:text-slate-600"
                 >
                   Submit order
                 </button>
               </div>
-              {ticketMsg && <div className={`mt-2 text-[10px] ${ticketMsg.ok ? "text-emerald-400" : "text-rose-400"}`} role="status">{ticketMsg.text}</div>}
+              {ticketMsg && <div className={`mt-2 text-[11px] ${ticketMsg.ok ? "text-emerald-400" : "text-rose-400"}`} role="status">{ticketMsg.text}</div>}
             </div>
           </Panel>
-
-          <Panel
-            title="LSM Storage"
-            eyebrow="WAL → MemTable → SSTable"
-            icon="database"
-            className="col-span-12 xl:col-span-4"
-            action={<Badge kind="planned" label="NOT IMPLEMENTED" />}
-          >
-            <div className="p-4">
-              <div className="flex items-stretch gap-2">
-                {[["WAL", "Write-ahead log", "database"], ["MEMTABLE", "In-memory", "layers"], ["SSTABLE", "On-disk", "server"]].map(([label, meta, icon], index) => (
-                  <div className="contents" key={label}>
-                    {index > 0 && <div className="flex items-center text-slate-700"><Icon name="chevron" size="sm" /></div>}
-                    <div className="flex min-w-0 flex-1 flex-col items-center rounded-lg border border-dashed border-slate-700 bg-slate-950/40 px-2 py-3 text-center">
-                      <div className="mb-2 grid size-8 place-items-center rounded bg-slate-800 text-slate-500"><Icon name={icon as IconName} /></div>
-                      <div className="text-[9px] font-black tracking-wider text-slate-400">{label}</div>
-                      <div className="mt-0.5 text-[9px] text-slate-600">{meta}</div>
-                      <div className="mt-2 font-mono text-[9px] font-bold text-blue-400/70">PLANNED</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <div className="mt-3 flex items-center justify-between rounded-lg border border-dashed border-slate-700 px-3 py-2 text-[10px]">
-                <span className="text-slate-500">Compaction · Bloom filters · crash recovery</span>
-                <span className="font-mono text-slate-600">ROADMAP</span>
-              </div>
-            </div>
-          </Panel>
-
-          <section className="col-span-12 overflow-hidden rounded-xl border border-slate-800 bg-slate-900/70">
-            <div className="grid grid-cols-2 divide-x divide-y divide-slate-800 md:grid-cols-4 xl:grid-cols-8 xl:divide-y-0">
-              {metrics.map(([label, value, icon]) => (
-                <div key={label} className="group px-4 py-3 transition hover:bg-slate-800/40">
-                  <div className="mb-2 flex items-center justify-between text-slate-600 group-hover:text-cyan-400">
-                    <Icon name={icon} size="sm" />
-                    <span className={`size-1.5 rounded-full ${hasLiveData ? "bg-emerald-400" : "bg-slate-700"}`} />
-                  </div>
-                  <div className="font-mono text-lg font-black text-slate-300">{value}</div>
-                  <div className="text-[9px] font-bold tracking-wider text-slate-600">{label}</div>
-                </div>
-              ))}
-            </div>
-          </section>
-
-          <Panel
-            title="System Architecture"
-            eyebrow="What exists today vs. roadmap"
-            icon="layers"
-            className="col-span-12 xl:col-span-7"
-          >
-            <div className="border-b border-slate-800 p-4">
-              <div className="flex min-w-0 items-stretch gap-2 overflow-x-auto pb-1">
-                {[
-                  ["C++ ENGINE", "Matching · MPSC", "cpu", false],
-                  ["TELEMETRY", "JSON lines · stats", "activity", false],
-                  ["WS BRIDGE", "Python · control", "server", false],
-                  ["TICKFORGE UI", "Monitor + ticket", "layers", false],
-                  ["LSM STORAGE", "WAL · MemTable", "database", true],
-                ].map(([label, meta, icon, planned], index) => (
-                  <div className="contents" key={label as string}>
-                    {index > 0 && <div className="flex items-center text-slate-700"><Icon name="chevron" size="sm" /></div>}
-                    <div className={`min-w-32 flex-1 rounded-lg border px-3 py-3 ${planned ? "border-dashed border-slate-700 bg-slate-950/30" : "border-slate-800 bg-slate-950/60"}`}>
-                      <div className={`mb-3 grid size-8 place-items-center rounded bg-slate-800 ${planned ? "text-slate-500" : "text-cyan-400"}`}><Icon name={icon as IconName} /></div>
-                      <div className="text-[9px] font-black tracking-wider text-slate-300">{label as string}</div>
-                      <div className="mt-1 text-[9px] text-slate-600">{planned ? "planned" : (meta as string)}</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="grid gap-px bg-slate-800 md:grid-cols-2">
-              <div className="bg-slate-900 p-4">
-                <div className="mb-3 flex items-center justify-between">
-                  <div className="text-[10px] font-black uppercase tracking-wider text-emerald-400">Working today</div>
-                  <div className="rounded bg-emerald-500/10 px-2 py-1 font-mono text-[9px] font-bold text-emerald-400">{workingToday.length} capabilities</div>
-                </div>
-                <div className="grid grid-cols-2 gap-x-4 gap-y-2">
-                  {workingToday.map((capability) => (
-                    <div key={capability} className="flex items-center gap-2 text-[10px] text-slate-400">
-                      <span className="grid size-4 shrink-0 place-items-center rounded-full bg-emerald-500/10 text-[9px] font-black text-emerald-400">✓</span>
-                      <span>{capability}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              <div className="bg-slate-900 p-4">
-                <div className="mb-3 flex items-center justify-between">
-                  <div className="text-[10px] font-black uppercase tracking-wider text-blue-400">Roadmap</div>
-                  <div className="rounded bg-blue-500/10 px-2 py-1 font-mono text-[9px] font-bold text-blue-400">{roadmap.length} planned</div>
-                </div>
-                <div className="grid grid-cols-2 gap-x-4 gap-y-2">
-                  {roadmap.map((capability) => (
-                    <div key={capability} className="flex items-center gap-2 text-[10px] text-slate-400">
-                      <span className="size-2 shrink-0 rounded-full bg-blue-400 shadow-sm shadow-blue-400" />
-                      <span>{capability}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </Panel>
-
-          <Panel
+            <Panel
             title="Latency Histogram"
             eyebrow="Queue → match, since engine start"
             icon="clock"
@@ -944,7 +991,7 @@ function App() {
                     </div>
                   ))}
                 </div>
-                <div className="mt-1 flex gap-1 px-2 font-mono text-[8px] text-slate-600">
+                <div className="mt-1 flex gap-1 px-2 font-mono text-[9px] text-slate-600">
                   {histShown.map((_, index) => (
                     <div key={index} className="flex-1 text-center">{index % 4 === 0 ? fmtUs(2 ** index).replace(" ", "") : ""}</div>
                   ))}
@@ -952,28 +999,33 @@ function App() {
                 <div className="mt-3 grid grid-cols-4 gap-2 text-center">
                   {[["P50", `≤ ${fmtUs(stats.p50LatencyUs)}`], ["P99", `≤ ${fmtUs(stats.p99LatencyUs)}`], ["AVG", fmtUs(stats.avgLatencyUs)], ["SAMPLES", fmtInt(histTotal)]].map(([label, value]) => (
                     <div key={label} className="rounded-md border border-slate-800 bg-slate-950/50 px-2 py-2">
-                      <div className="font-mono text-[11px] font-bold text-slate-200">{value}</div>
-                      <div className="text-[9px] font-bold tracking-wider text-slate-600">{label}</div>
+                      <div className="font-mono text-[12px] font-bold text-slate-200">{value}</div>
+                      <div className="text-[10px] font-bold tracking-wider text-slate-600">{label}</div>
                     </div>
                   ))}
                 </div>
-                <div className="mt-2 text-[9px] text-slate-600">Percentiles are bucket upper bounds (power-of-two µs buckets). Includes time spent waiting in the queue.</div>
+                <div className="mt-2 text-[10px] text-slate-600">Percentiles are bucket upper bounds (power-of-two µs buckets). Includes time spent waiting in the queue.</div>
               </div>
             ) : (
-              <div className="flex min-h-56 flex-col items-center justify-center px-6 py-10 text-center text-[10px] text-slate-500">
+              <div className="flex min-h-56 flex-col items-center justify-center px-6 py-10 text-center text-[11px] text-slate-500">
                 <div className="mb-2 text-xs font-bold text-slate-400">No latency samples yet</div>
                 {live ? "Press Start to run the engine and collect samples." : "Connect the telemetry bridge, then start the engine."}
               </div>
             )}
           </Panel>
+          </div>
+        </section>
 
-          <Panel
+        <section id="market" className="scroll-mt-24 pb-16">
+          <SectionHead title="Market data" text="Real intraday prices for any S&P 500 stock, served by the Python API." />
+          <div className="grid grid-cols-12 items-start gap-5">
+            <Panel
             title={`${selectedSymbol} Market Data`}
             eyebrow="Python stock API · 1 day / 5 minute interval"
             icon="activity"
-            className="col-span-12"
+            className="col-span-12 xl:col-span-8"
             action={
-              <div className={`flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-[9px] font-bold uppercase tracking-wider ${
+              <div className={`flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-wider ${
                 stockApiState === "online"
                   ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-400"
                   : stockApiState === "loading" || stockApiState === "stale"
@@ -995,9 +1047,9 @@ function App() {
                         {stockSnapshot.change >= 0 ? "+" : ""}{stockSnapshot.change.toFixed(2)} ({stockSnapshot.changePercent.toFixed(2)}%)
                       </div>
                     </div>
-                    <div className="mt-1 text-[10px] text-slate-500">Last update {new Date(stockSnapshot.updatedAt).toLocaleString()}</div>
+                    <div className="mt-1 text-[11px] text-slate-500">Last update {new Date(stockSnapshot.updatedAt).toLocaleString()}</div>
                     {stockApiState === "stale" && stockApiError && (
-                      <div className="mt-2 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-[10px] text-amber-400" role="status">
+                      <div className="mt-2 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-400" role="status">
                         Showing last good data — latest refresh failed: {stockApiError.message}
                       </div>
                     )}
@@ -1009,7 +1061,7 @@ function App() {
                       ["Market state", stockSnapshot.marketState],
                       ["Data points", String(stockSnapshot.history.length)],
                     ].map(([label, value]) => (
-                      <div key={label} className="flex items-center justify-between border-b border-slate-800 pb-2 text-[10px] last:border-0">
+                      <div key={label} className="flex items-center justify-between border-b border-slate-800 pb-2 text-[11px] last:border-0">
                         <span className="text-slate-500">{label}</span>
                         <span className="font-mono font-bold text-slate-300">{value}</span>
                       </div>
@@ -1032,29 +1084,28 @@ function App() {
                       ? "Python stock API unavailable"
                       : `Couldn't load ${selectedSymbol}`}
                 </div>
-                <div className="mt-2 max-w-xl text-[10px] leading-relaxed text-slate-500">
+                <div className="mt-2 max-w-xl text-[11px] leading-relaxed text-slate-500">
                   {stockApiState === "loading"
                     ? "Waiting for a valid quote and OHLCV history response."
                     : stockApiError?.kind === "network"
                       ? "Start the Python service (uvicorn main:app in market-data/) or set VITE_STOCK_API_URL in your .env file."
                       : stockApiError?.message}
                 </div>
-                <div className="mt-4 rounded-md bg-slate-950 px-3 py-2 font-mono text-[9px] text-slate-600">GET /api/stocks/{selectedSymbol}?range=1d&amp;interval=5m</div>
+                <div className="mt-4 rounded-md bg-slate-950 px-3 py-2 font-mono text-[10px] text-slate-600">GET /api/stocks/{selectedSymbol}?range=1d&amp;interval=5m</div>
               </div>
             )}
           </Panel>
-
-          <Panel
+            <Panel
             title="S&P 500 Universe"
             eyebrow={`${sp500.length} current constituents · ${sectors.length - 1} sectors`}
             icon="book"
-            className="col-span-12 xl:col-span-5"
+            className="col-span-12 xl:col-span-4"
             action={
               <button
                 type="button"
                 aria-expanded={instrumentsOpen}
                 onClick={() => setInstrumentsOpen((value) => !value)}
-                className="flex cursor-pointer items-center gap-2 rounded-md border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-[10px] font-bold text-slate-300 transition hover:border-slate-500"
+                className="flex cursor-pointer items-center gap-2 rounded-md border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-[11px] font-bold text-slate-300 transition hover:border-slate-500"
               >
                 {instrumentsOpen ? "Collapse list" : "Browse all stocks"}
                 <span className={`transition-transform ${instrumentsOpen ? "rotate-90" : ""}`}><Icon name="chevron" size="sm" /></span>
@@ -1063,12 +1114,12 @@ function App() {
           >
             <div className="flex items-center justify-between border-b border-slate-800 bg-slate-950/40 px-4 py-3">
               <div>
-                <div className="text-[9px] font-bold uppercase tracking-wider text-slate-600">Active instrument</div>
+                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-600">Active instrument</div>
                 <div className="mt-0.5 font-mono text-lg font-black text-cyan-400">{selectedSymbol}</div>
               </div>
               <div className="text-right">
-                <div className="text-[9px] font-bold uppercase tracking-wider text-slate-600">Universe source</div>
-                <div className="mt-1 text-[10px] text-slate-400">S&P 500 constituents dataset</div>
+                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-600">Universe source</div>
+                <div className="mt-1 text-[11px] text-slate-400">S&P 500 constituents dataset</div>
               </div>
             </div>
             {instrumentsOpen ? (
@@ -1079,7 +1130,7 @@ function App() {
                     onChange={(event) => setQuery(event.target.value)}
                     placeholder="Search symbol or company…"
                     aria-label="Search instruments"
-                    className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-[11px] text-slate-200 outline-none placeholder:text-slate-600 focus:border-cyan-400"
+                    className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-[12px] text-slate-200 outline-none placeholder:text-slate-600 focus:border-cyan-400"
                   />
                 </div>
                 <div className="flex gap-1.5 overflow-x-auto border-b border-slate-800 px-4 py-3">
@@ -1089,7 +1140,7 @@ function App() {
                       type="button"
                       aria-pressed={selectedSector === sector}
                       onClick={() => setSelectedSector(sector)}
-                      className={`shrink-0 cursor-pointer rounded-md border px-2 py-1.5 text-[9px] font-bold transition ${
+                      className={`shrink-0 cursor-pointer rounded-md border px-2 py-1.5 text-[10px] font-bold transition ${
                         selectedSector === sector
                           ? "border-cyan-400/40 bg-cyan-400/10 text-cyan-400"
                           : "border-slate-800 bg-slate-950 text-slate-500 hover:border-slate-600"
@@ -1100,7 +1151,7 @@ function App() {
                   ))}
                 </div>
                 <div className="grid max-h-80 grid-cols-1 overflow-y-auto sm:grid-cols-2">
-                  {visibleStocks.length === 0 && <div className="col-span-full px-4 py-6 text-center text-[10px] text-slate-600">No instruments match your search.</div>}
+                  {visibleStocks.length === 0 && <div className="col-span-full px-4 py-6 text-center text-[11px] text-slate-600">No instruments match your search.</div>}
                   {visibleStocks.map((stock) => (
                     <button
                       key={stock.symbol}
@@ -1112,14 +1163,14 @@ function App() {
                       }`}
                     >
                       <div className="min-w-0 pr-3">
-                        <div className={`font-mono text-[11px] font-black ${selectedSymbol === stock.symbol ? "text-cyan-400" : "text-slate-300"}`}>{stock.symbol}</div>
-                        <div className="truncate text-[9px] text-slate-500">{stock.name}</div>
+                        <div className={`font-mono text-[12px] font-black ${selectedSymbol === stock.symbol ? "text-cyan-400" : "text-slate-300"}`}>{stock.symbol}</div>
+                        <div className="truncate text-[10px] text-slate-500">{stock.name}</div>
                       </div>
-                      <div className="max-w-24 truncate rounded bg-slate-800 px-1.5 py-1 text-[8px] font-bold text-slate-500">{stock.sector}</div>
+                      <div className="max-w-24 truncate rounded bg-slate-800 px-1.5 py-1 text-[9px] font-bold text-slate-500">{stock.sector}</div>
                     </button>
                   ))}
                 </div>
-                <div className="border-t border-slate-800 px-4 py-2 text-[9px] text-slate-600">
+                <div className="border-t border-slate-800 px-4 py-2 text-[10px] text-slate-600">
                   Showing {visibleStocks.length} instruments · Select a symbol to load its market data
                 </div>
               </>
@@ -1132,15 +1183,60 @@ function App() {
                 ].map(([label, value]) => (
                   <div key={label} className="bg-slate-900 px-4 py-4 text-center">
                     <div className="font-mono text-lg font-black text-slate-300">{value}</div>
-                    <div className="mt-1 text-[9px] font-bold tracking-wider text-slate-600">{label}</div>
+                    <div className="mt-1 text-[10px] font-bold tracking-wider text-slate-600">{label}</div>
                   </div>
                 ))}
               </div>
             )}
           </Panel>
+          </div>
+        </section>
+      </div>
+
+      <PinnedFlow />
+
+      <div className="mx-auto max-w-[1500px] px-4 pb-6 pt-10 lg:px-8">
+        <div className="grid grid-cols-12 gap-5">
+          <Panel
+            title="Project status"
+            eyebrow="What exists today, and what is still planned"
+            icon="layers"
+            className="col-span-12"
+          >
+            <div className="grid gap-px bg-slate-800 md:grid-cols-2">
+              <div className="bg-slate-900 p-4">
+                <div className="mb-3 flex items-center justify-between">
+                  <div className="text-[11px] font-black uppercase tracking-wider text-emerald-400">Working today</div>
+                  <div className="rounded bg-emerald-500/10 px-2 py-1 font-mono text-[10px] font-bold text-emerald-400">{workingToday.length} capabilities</div>
+                </div>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+                  {workingToday.map((capability) => (
+                    <div key={capability} className="flex items-center gap-2 text-[11px] text-slate-400">
+                      <span className="grid size-4 shrink-0 place-items-center rounded-full bg-emerald-500/10 text-[10px] font-black text-emerald-400">✓</span>
+                      <span>{capability}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="bg-slate-900 p-4">
+                <div className="mb-3 flex items-center justify-between">
+                  <div className="text-[11px] font-black uppercase tracking-wider text-blue-400">Roadmap</div>
+                  <div className="rounded bg-blue-500/10 px-2 py-1 font-mono text-[10px] font-bold text-blue-400">{roadmap.length} planned</div>
+                </div>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+                  {roadmap.map((capability) => (
+                    <div key={capability} className="flex items-center gap-2 text-[11px] text-slate-400">
+                      <span className="size-2 shrink-0 rounded-full bg-blue-400 shadow-sm shadow-blue-400" />
+                      <span>{capability}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </Panel>
         </div>
 
-        <footer className="flex flex-col gap-2 px-1 py-3 text-[9px] font-medium uppercase tracking-wider text-slate-600 sm:flex-row sm:items-center sm:justify-between">
+        <footer className="flex flex-col gap-2 px-1 py-6 text-[10px] font-medium uppercase tracking-wider text-slate-600 sm:flex-row sm:items-center sm:justify-between">
           <span>TickForge observability console · Controller isolated from matching path</span>
           <span className="flex items-center gap-2">
             <span className={`size-1.5 rounded-full ${live ? "bg-emerald-400" : "bg-amber-400"}`} />
