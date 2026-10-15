@@ -5,6 +5,7 @@
 #include <fcntl.h>
 #include <iostream>
 #include <unistd.h>
+#include <cstdint>
 
 namespace wal {
 
@@ -57,6 +58,45 @@ bool WalWriter::commit(uint64_t txid, const std::vector<std::string> &records) {
     return false;
   }
   return true;
+}
+// Add this to the very bottom of src/wal/wal_writer.cpp
+
+static wal::WalWriter* global_wal_writer = nullptr;
+
+extern "C" {
+    // 1. Function to initialize the WAL writer with a file path from Rust
+    bool c_wal_init(const char* path, bool sync_on_commit) {
+        if (global_wal_writer != nullptr) {
+            delete global_wal_writer;
+        }
+        global_wal_writer = new wal::WalWriter(std::string(path), sync_on_commit);
+        return true;
+    }
+
+    // 2. Function to append records for your virtual traders
+    bool c_wal_commit_records(uint64_t txid, const char** records_array, size_t array_len) {
+        if (global_wal_writer == nullptr) {
+            return false;
+        }
+
+        // Convert the C-style array of raw strings into a C++ std::vector<std::string>
+        std::vector<std::string> cpp_records;
+        cpp_records.reserve(array_len);
+        for (size_t i = 0; i < array_len; ++i) {
+            cpp_records.push_back(std::string(records_array[i]));
+        }
+
+        // Invoke your actual class method
+        return global_wal_writer->commit(txid, cpp_records);
+    }
+
+    // 3. Function to safely close the file descriptor when shutting down
+    void c_wal_close() {
+        if (global_wal_writer != nullptr) {
+            delete global_wal_writer;
+            global_wal_writer = nullptr;
+        }
+    }
 }
 
 } // namespace wal
