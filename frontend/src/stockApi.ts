@@ -31,19 +31,14 @@ export class StockApiError extends Error {
 
 const API_URL = (import.meta.env.VITE_STOCK_API_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
 
-const isNumber = (value: unknown): value is number =>
-  typeof value === "number" && Number.isFinite(value);
+const isNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
+const isString = (value: unknown): value is string => typeof value === "string";
+const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 
-export async function getStockSnapshot(
-  symbol: string,
-  signal?: AbortSignal,
-): Promise<StockSnapshot> {
+async function requestJson(url: string, signal?: AbortSignal): Promise<unknown> {
   let response: Response;
   try {
-    response = await fetch(
-      `${API_URL}/api/stocks/${encodeURIComponent(symbol)}?range=1d&interval=5m`,
-      { signal },
-    );
+    response = await fetch(url, { signal });
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") throw error;
     throw new StockApiError("network", "Unable to reach the stock API");
@@ -53,9 +48,7 @@ export async function getStockSnapshot(
     let detail = `Stock API returned ${response.status}`;
     try {
       const body: unknown = await response.json();
-      if (body && typeof body === "object" && typeof (body as { detail?: unknown }).detail === "string") {
-        detail = (body as { detail: string }).detail;
-      }
+      if (isObject(body) && isString(body.detail)) detail = body.detail;
     } catch {
       /* keep the generic message */
     }
@@ -63,35 +56,33 @@ export async function getStockSnapshot(
   }
 
   const data: unknown = await response.json();
+  if (!isObject(data)) throw new StockApiError("contract", "Stock API returned invalid JSON");
+  if (isString(data.error)) throw new StockApiError("http", data.error);
+  return data;
+}
 
-  if (!data || typeof data !== "object") {
-    throw new StockApiError("contract", "Stock API returned invalid JSON");
-  }
-  const errorField = (data as { error?: unknown }).error;
-  if (typeof errorField === "string") {
-    throw new StockApiError("http", errorField);
-  }
+export async function getStockSnapshot(symbol: string, signal?: AbortSignal): Promise<StockSnapshot> {
+  const data = (await requestJson(`${API_URL}/api/stocks/${encodeURIComponent(symbol)}?range=1d&interval=5m`, signal)) as Partial<StockSnapshot>;
 
-  const snapshot = data as Partial<StockSnapshot>;
   if (
-    typeof snapshot.symbol !== "string" ||
-    typeof snapshot.currency !== "string" ||
-    !isNumber(snapshot.price) ||
-    !isNumber(snapshot.previousClose) ||
-    !isNumber(snapshot.change) ||
-    !isNumber(snapshot.changePercent) ||
-    !isNumber(snapshot.volume) ||
-    typeof snapshot.marketState !== "string" ||
-    typeof snapshot.updatedAt !== "string" ||
-    !Array.isArray(snapshot.history)
+    !isString(data.symbol) ||
+    !isString(data.currency) ||
+    !isNumber(data.price) ||
+    !isNumber(data.previousClose) ||
+    !isNumber(data.change) ||
+    !isNumber(data.changePercent) ||
+    !isNumber(data.volume) ||
+    !isString(data.marketState) ||
+    !isString(data.updatedAt) ||
+    !Array.isArray(data.history)
   ) {
     throw new StockApiError("contract", "Stock API response does not match the TickForge contract");
   }
 
-  const history = snapshot.history.filter(
+  const history = data.history.filter(
     (point): point is PricePoint =>
       !!point &&
-      typeof point.timestamp === "string" &&
+      isString(point.timestamp) &&
       isNumber(point.open) &&
       isNumber(point.high) &&
       isNumber(point.low) &&
@@ -99,9 +90,181 @@ export async function getStockSnapshot(
       isNumber(point.volume),
   );
 
-  if (history.length === 0) {
-    throw new StockApiError("contract", "Stock API returned no valid OHLCV history");
+  if (history.length === 0) throw new StockApiError("contract", "Stock API returned no valid OHLCV history");
+  return { ...data, history } as StockSnapshot;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Journey (GET /api/stocks/{symbol}/journey?range=...)
+// ---------------------------------------------------------------------------------------------
+
+export type JourneyRange = "1d" | "5d" | "1mo" | "6mo" | "1y";
+
+export type JourneyStamp = { time: string; label: string };
+export type JourneyPoint = JourneyStamp & { price: number };
+export type JourneySwing = { percent: number; start: JourneyPoint; end: JourneyPoint };
+export type JourneyEvent = {
+  kind: "open" | "rise" | "fall" | "high" | "low" | "volume" | "close";
+  time: string;
+  endTime?: string;
+  label: string;
+  text: string;
+};
+export type JourneyBar = PricePoint & { label: string };
+
+export type JourneyData = {
+  symbol: string;
+  range: JourneyRange;
+  interval: string;
+  timezone: string;
+  currency: string;
+  barCount: number;
+  periodStart: JourneyStamp;
+  periodEnd: JourneyStamp;
+  open: number;
+  close: number;
+  change: number;
+  changePercent: number;
+  high: JourneyPoint;
+  low: JourneyPoint;
+  rangePercent: number;
+  gapPercent: number | null;
+  maxDrawdown: (JourneySwing & { recovered: boolean; recoveredAt: JourneyStamp | null }) | null;
+  maxRunUp: JourneySwing | null;
+  legs: (JourneySwing & { direction: "rise" | "fall" })[];
+  biggestBar: { up: (JourneyStamp & { percent: number }) | null; down: (JourneyStamp & { percent: number }) | null };
+  volume: { total: number; averagePerBar: number; spikes: (JourneyStamp & { volume: number; multiple: number })[] };
+  vwap: number | null;
+  volatility: { perBarPercent: number | null; barLabel: string };
+  bars: { up: number; down: number; flat: number };
+  yearHigh: number | null;
+  yearLow: number | null;
+  timeline: JourneyEvent[];
+  history: JourneyBar[];
+  storyMethod: string;
+  dataNote: string;
+  updatedAt: string;
+};
+
+const EVENT_KINDS = ["open", "rise", "fall", "high", "low", "volume", "close"];
+const bad = (what: string) => new StockApiError("contract", `Journey response is missing or invalid: ${what}`);
+
+function stamp(value: unknown, what: string): JourneyStamp {
+  if (!isObject(value) || !isString(value.time) || !isString(value.label)) throw bad(what);
+  return { time: value.time, label: value.label };
+}
+function point(value: unknown, what: string): JourneyPoint {
+  if (!isObject(value) || !isNumber(value.price)) throw bad(what);
+  return { ...stamp(value, what), price: value.price };
+}
+function swing(value: unknown, what: string): JourneySwing {
+  if (!isObject(value) || !isNumber(value.percent)) throw bad(what);
+  return { percent: value.percent, start: point(value.start, `${what}.start`), end: point(value.end, `${what}.end`) };
+}
+const orNull = <T,>(value: unknown, parse: (v: unknown) => T): T | null => (value === null || value === undefined ? null : parse(value));
+const numOrNull = (value: unknown): number | null => (isNumber(value) ? value : null);
+
+export function parseJourney(data: unknown, symbol: string, range: JourneyRange): JourneyData {
+  if (!isObject(data)) throw bad("body");
+  if (!isString(data.symbol) || data.symbol.toUpperCase() !== symbol.toUpperCase()) throw bad("symbol does not match the request");
+  if (data.range !== range) throw bad("range does not match the request");
+  for (const key of ["interval", "timezone", "currency", "updatedAt", "storyMethod", "dataNote"] as const) {
+    if (!isString(data[key])) throw bad(key);
+  }
+  for (const key of ["barCount", "open", "close", "change", "changePercent", "rangePercent"] as const) {
+    if (!isNumber(data[key])) throw bad(key);
   }
 
-  return { ...snapshot, history } as StockSnapshot;
+  if (!Array.isArray(data.history) || data.history.length === 0) throw bad("history");
+  const history: JourneyBar[] = data.history.map((bar, i) => {
+    if (
+      !isObject(bar) ||
+      !isString(bar.timestamp) ||
+      !isString(bar.label) ||
+      !isNumber(bar.open) ||
+      !isNumber(bar.high) ||
+      !isNumber(bar.low) ||
+      !isNumber(bar.close) ||
+      !isNumber(bar.volume)
+    ) {
+      throw bad(`history[${i}]`);
+    }
+    return { timestamp: bar.timestamp, label: bar.label, open: bar.open, high: bar.high, low: bar.low, close: bar.close, volume: bar.volume };
+  });
+
+  if (!Array.isArray(data.timeline)) throw bad("timeline");
+  const timeline: JourneyEvent[] = data.timeline.map((event, i) => {
+    if (!isObject(event) || !isString(event.kind) || !EVENT_KINDS.includes(event.kind) || !isString(event.time) || !isString(event.label) || !isString(event.text)) {
+      throw bad(`timeline[${i}]`);
+    }
+    return { kind: event.kind as JourneyEvent["kind"], time: event.time, label: event.label, text: event.text, ...(isString(event.endTime) ? { endTime: event.endTime } : {}) };
+  });
+
+  const volume = data.volume;
+  if (!isObject(volume) || !isNumber(volume.total) || !isNumber(volume.averagePerBar) || !Array.isArray(volume.spikes)) throw bad("volume");
+  const bars = data.bars;
+  if (!isObject(bars) || !isNumber(bars.up) || !isNumber(bars.down) || !isNumber(bars.flat)) throw bad("bars");
+  const volatility = data.volatility;
+  if (!isObject(volatility) || !isString(volatility.barLabel)) throw bad("volatility");
+  const biggest = isObject(data.biggestBar) ? data.biggestBar : {};
+  const barMove = (v: unknown) =>
+    orNull(v, (x) => {
+      if (!isObject(x) || !isNumber(x.percent)) throw bad("biggestBar");
+      return { ...stamp(x, "biggestBar"), percent: x.percent };
+    });
+
+  return {
+    symbol: data.symbol,
+    range,
+    interval: data.interval as string,
+    timezone: data.timezone as string,
+    currency: data.currency as string,
+    barCount: data.barCount as number,
+    periodStart: stamp(data.periodStart, "periodStart"),
+    periodEnd: stamp(data.periodEnd, "periodEnd"),
+    open: data.open as number,
+    close: data.close as number,
+    change: data.change as number,
+    changePercent: data.changePercent as number,
+    high: point(data.high, "high"),
+    low: point(data.low, "low"),
+    rangePercent: data.rangePercent as number,
+    gapPercent: numOrNull(data.gapPercent),
+    maxDrawdown: orNull(data.maxDrawdown, (v) => {
+      const base = swing(v, "maxDrawdown");
+      const x = v as Record<string, unknown>;
+      return { ...base, recovered: x.recovered === true, recoveredAt: orNull(x.recoveredAt, (s) => stamp(s, "recoveredAt")) };
+    }),
+    maxRunUp: orNull(data.maxRunUp, (v) => swing(v, "maxRunUp")),
+    legs: (Array.isArray(data.legs) ? data.legs : []).map((leg, i) => {
+      const base = swing(leg, `legs[${i}]`);
+      const direction = (leg as Record<string, unknown>).direction;
+      if (direction !== "rise" && direction !== "fall") throw bad(`legs[${i}].direction`);
+      return { ...base, direction };
+    }),
+    biggestBar: { up: barMove(biggest.up), down: barMove(biggest.down) },
+    volume: {
+      total: volume.total,
+      averagePerBar: volume.averagePerBar,
+      spikes: volume.spikes.map((s, i) => {
+        if (!isObject(s) || !isNumber(s.volume) || !isNumber(s.multiple)) throw bad(`volume.spikes[${i}]`);
+        return { ...stamp(s, `volume.spikes[${i}]`), volume: s.volume, multiple: s.multiple };
+      }),
+    },
+    vwap: numOrNull(data.vwap),
+    volatility: { perBarPercent: numOrNull(volatility.perBarPercent), barLabel: volatility.barLabel },
+    bars: { up: bars.up, down: bars.down, flat: bars.flat },
+    yearHigh: numOrNull(data.yearHigh),
+    yearLow: numOrNull(data.yearLow),
+    timeline,
+    history,
+    storyMethod: data.storyMethod as string,
+    dataNote: data.dataNote as string,
+    updatedAt: data.updatedAt as string,
+  };
+}
+
+export async function getJourney(symbol: string, range: JourneyRange, signal?: AbortSignal): Promise<JourneyData> {
+  const data = await requestJson(`${API_URL}/api/stocks/${encodeURIComponent(symbol)}/journey?range=${range}`, signal);
+  return parseJourney(data, symbol, range);
 }
