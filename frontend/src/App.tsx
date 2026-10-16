@@ -3,6 +3,19 @@ import { sp500 } from "./sp500";
 import { scrollToSection, useActiveSection, useInView, useSmoothScroll } from "./scroll";
 import { getStockSnapshot, StockApiError, type StockSnapshot } from "./stockApi";
 import { TELEMETRY_URL, useTelemetry, type BookLevel } from "./telemetry";
+import {
+  connectTradesSocket,
+  connectTradersSocket,
+  getExchangeHealth,
+  getRecentTrades,
+  getTraders,
+  postOrder,
+  updatePrice,
+  type ExchangeHealth,
+  type LiveTrade,
+  type Trader,
+  EXCHANGE_SYMBOLS,
+} from "./exchangeApi";
 
 type IconName =
   | "activity"
@@ -365,6 +378,7 @@ const navSections = [
   { id: "overview", label: "Overview" },
   { id: "engine", label: "Engine" },
   { id: "market", label: "Market" },
+  { id: "exchange", label: "Exchange" },
   { id: "how", label: "How it works" },
 ];
 const navIds = navSections.map((section) => section.id);
@@ -483,6 +497,71 @@ function App() {
   useSmoothScroll();
   const activeSection = useActiveSection(navIds);
 
+  // ---- Exchange API state -----------------------------------------------
+  const [exchangeHealth, setExchangeHealth] = useState<ExchangeHealth | null>(null);
+  const [liveTrades, setLiveTrades] = useState<LiveTrade[]>([]);
+  const [liveTraders, setLiveTraders] = useState<Trader[]>([]);
+  const [exchangeOnline, setExchangeOnline] = useState(false);
+  const [orderSymbol, setOrderSymbol] = useState<string>("AAPL");
+  const [orderSide, setOrderSide] = useState<"BUY" | "SELL">("BUY");
+  const [orderQty, setOrderQty] = useState("100");
+  const [orderPrice, setOrderPrice] = useState("150.00");
+  const [orderMsg, setOrderMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  // Connect to Exchange API WebSockets + poll health
+  useEffect(() => {
+    // Health poll
+    const pollHealth = async () => {
+      try {
+        const h = await getExchangeHealth();
+        setExchangeHealth(h);
+        setExchangeOnline(true);
+      } catch {
+        setExchangeOnline(false);
+      }
+    };
+    pollHealth();
+    const healthTimer = window.setInterval(pollHealth, 5000);
+
+    // Seed recent trades
+    getRecentTrades(50).then(setLiveTrades).catch(() => {});
+    getTraders().then(setLiveTraders).catch(() => {});
+
+    // Trades WebSocket
+    const closeTrades = connectTradesSocket(
+      (t) => setLiveTrades((prev) => [t, ...prev].slice(0, 200)),
+      (history) => setLiveTrades(history),
+    );
+
+    // Traders WebSocket
+    const closeTraders = connectTradersSocket((traders) => setLiveTraders(traders));
+
+    return () => {
+      window.clearInterval(healthTimer);
+      closeTrades();
+      closeTraders();
+    };
+  }, []);
+
+  const submitExchangeOrder = async () => {
+    const qty = Number(orderQty);
+    const price = Number(orderPrice);
+    if (!Number.isInteger(qty) || qty < 1) {
+      setOrderMsg({ ok: false, text: "Quantity must be a positive integer." });
+      return;
+    }
+    if (!Number.isFinite(price) || price <= 0) {
+      setOrderMsg({ ok: false, text: "Price must be a positive number." });
+      return;
+    }
+    try {
+      await postOrder({ symbol: orderSymbol, side: orderSide, price, quantity: qty, trader_id: 0 });
+      setOrderMsg({ ok: true, text: `Submitted ${orderSide} ${qty} ${orderSymbol} @ ${price.toFixed(2)}` });
+    } catch {
+      setOrderMsg({ ok: false, text: "Exchange API unreachable." });
+    }
+  };
+
   // ---- run controls ------------------------------------------------------
   const [simState, setSimState] = useState<RunState>("closed");
   const [speed, setSpeed] = useState<1 | 10 | 100>(10);
@@ -565,6 +644,14 @@ function App() {
       window.clearInterval(poller);
     };
   }, [selectedSymbol]);
+
+  // Push current stock price to Exchange API whenever it refreshes
+  useEffect(() => {
+    if (stockSnapshot && exchangeOnline) {
+      updatePrice(stockSnapshot.symbol, stockSnapshot.price).catch(() => {});
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stockSnapshot?.price, exchangeOnline]);
 
   const control = (cmd: "start" | "pause" | "stop" | "reset") => {
     if (live) {
@@ -1235,6 +1322,256 @@ function App() {
             </div>
           </Panel>
         </div>
+
+        {/* ================================================================
+            EXCHANGE SECTION — Virtual traders, live trade feed, order entry
+        ================================================================ */}
+        <section id="exchange" className="scroll-mt-24 pb-16 pt-10">
+          <SectionHead
+            title="Exchange"
+            text="24 virtual traders powering the live matching engine. Every matched trade is persisted via WAL + LSM storage."
+            aside={
+              <div className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-bold ${
+                exchangeOnline
+                  ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
+                  : "border-slate-700 bg-slate-800 text-slate-500"
+              }`}>
+                <span className={`size-2 rounded-full ${exchangeOnline ? "animate-pulse bg-emerald-400" : "bg-slate-600"}`} />
+                {exchangeOnline ? "Exchange API live" : "Exchange API offline"}
+                {exchangeHealth && (
+                  <span className="ml-2 font-mono text-[10px] text-slate-400">
+                    {exchangeHealth.db_trade_count} trades in DB
+                  </span>
+                )}
+              </div>
+            }
+          />
+
+          <div className="grid grid-cols-12 gap-5">
+
+            {/* ── Virtual Traders Table ──────────────────────────────── */}
+            <Panel
+              title="Virtual Traders"
+              eyebrow="24 autonomous agents · strategies: aggressive · passive · momentum · contrarian · scalper · random"
+              icon="traders"
+              className="col-span-12"
+              action={
+                <span className="rounded border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 font-mono text-[10px] font-bold text-emerald-400">
+                  {liveTraders.length} / 24 ACTIVE
+                </span>
+              }
+            >
+              <div className="overflow-x-auto">
+                <table className="w-full text-[11px]">
+                  <thead>
+                    <tr className="border-b border-slate-800 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                      <th className="px-4 py-2 text-left">ID</th>
+                      <th className="px-4 py-2 text-left">Name</th>
+                      <th className="px-4 py-2 text-left">Strategy</th>
+                      <th className="px-3 py-2 text-right">Cash</th>
+                      <th className="px-3 py-2 text-right">Portfolio $</th>
+                      <th className="px-3 py-2 text-right">P&amp;L</th>
+                      <th className="px-3 py-2 text-right">Trades</th>
+                      <th className="px-4 py-2 text-left">Last Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/60">
+                    {(liveTraders.length > 0 ? liveTraders : Array.from({ length: 6 }, (_, i) => ({
+                      trader_id: i + 1, name: "Loading…", strategy: "—",
+                      cash: 0, holdings: {}, trades_executed: 0, pnl: 0,
+                      portfolio_value: 0, last_action: "—",
+                    }))).map((trader) => {
+                      const pnlPositive = trader.pnl >= 0;
+                      const stratColor: Record<string, string> = {
+                        aggressive: "text-rose-400", passive: "text-sky-400",
+                        momentum: "text-amber-400", contrarian: "text-violet-400",
+                        scalper: "text-cyan-400", random: "text-slate-400",
+                      };
+                      return (
+                        <tr key={trader.trader_id} className="group transition hover:bg-slate-800/30">
+                          <td className="px-4 py-2 font-mono text-slate-500">{String(trader.trader_id).padStart(2, "0")}</td>
+                          <td className="px-4 py-2 font-semibold text-slate-200">{trader.name}</td>
+                          <td className={`px-4 py-2 font-mono text-[10px] font-bold uppercase ${stratColor[trader.strategy] ?? "text-slate-400"}`}>{trader.strategy}</td>
+                          <td className="px-3 py-2 text-right font-mono text-slate-400">${trader.cash.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+                          <td className="px-3 py-2 text-right font-mono text-slate-300">${trader.portfolio_value.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+                          <td className={`px-3 py-2 text-right font-mono font-bold ${pnlPositive ? "text-emerald-400" : "text-rose-400"}`}>
+                            {pnlPositive ? "+" : ""}{trader.pnl.toFixed(2)}
+                          </td>
+                          <td className="px-3 py-2 text-right font-mono text-slate-400">{trader.trades_executed}</td>
+                          <td className="max-w-48 truncate px-4 py-2 text-slate-500">{trader.last_action}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                {liveTraders.length === 0 && (
+                  <div className="py-6 text-center text-xs text-slate-600">Start the Exchange API to see live trader activity</div>
+                )}
+              </div>
+            </Panel>
+
+            {/* ── Live Trade Feed ───────────────────────────────────── */}
+            <Panel
+              title="Live Trade Feed"
+              eyebrow="Real-time matched trades from the C++ order book — persisted to LSM database"
+              icon="activity"
+              className="col-span-12 xl:col-span-7"
+              action={
+                <div className="flex items-center gap-2">
+                  <span className={`size-1.5 rounded-full ${exchangeOnline && liveTrades.length > 0 ? "animate-pulse bg-emerald-400" : "bg-slate-600"}`} />
+                  <span className="font-mono text-[10px] text-slate-500">{liveTrades.length} trades</span>
+                </div>
+              }
+            >
+              <div className="overflow-hidden">
+                <div className="max-h-80 overflow-y-auto">
+                  <table className="w-full text-[11px]">
+                    <thead className="sticky top-0 bg-slate-900">
+                      <tr className="border-b border-slate-800 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                        <th className="px-4 py-2 text-left">#</th>
+                        <th className="px-4 py-2 text-left">Symbol</th>
+                        <th className="px-3 py-2 text-right">Price</th>
+                        <th className="px-3 py-2 text-right">Qty</th>
+                        <th className="px-4 py-2 text-left">Buyer</th>
+                        <th className="px-4 py-2 text-left">Seller</th>
+                        <th className="px-3 py-2 text-right">Time</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/40">
+                      {liveTrades.length === 0 ? (
+                        <tr><td colSpan={7} className="py-8 text-center text-slate-600">Waiting for live trades…</td></tr>
+                      ) : liveTrades.slice(0, 100).map((t, i) => (
+                        <tr key={t.trade_id} className={`transition hover:bg-slate-800/30 ${i === 0 ? "bg-cyan-500/5" : ""}`}>
+                          <td className="px-4 py-1.5 font-mono text-slate-600">{t.trade_id}</td>
+                          <td className="px-4 py-1.5 font-mono font-bold text-cyan-400">{t.symbol}</td>
+                          <td className="px-3 py-1.5 text-right font-mono text-emerald-400">${t.price.toFixed(2)}</td>
+                          <td className="px-3 py-1.5 text-right font-mono text-slate-300">{t.quantity}</td>
+                          <td className="px-4 py-1.5 text-slate-400">{t.buyer}</td>
+                          <td className="px-4 py-1.5 text-slate-400">{t.seller}</td>
+                          <td className="px-3 py-1.5 text-right font-mono text-slate-600">
+                            {new Date(t.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </Panel>
+
+            {/* ── Manual Order Ticket + Exchange Status ─────────────── */}
+            <div className="col-span-12 flex flex-col gap-5 xl:col-span-5">
+
+              {/* Manual order entry */}
+              <Reveal>
+                <div className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/70 shadow-xl shadow-black/10">
+                  <div className="flex items-center gap-3 border-b border-slate-800 px-4 py-3">
+                    <div className="grid size-8 place-items-center rounded-lg border border-slate-700 bg-slate-800 text-cyan-400">
+                      <Icon name="bolt" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold uppercase tracking-wider text-slate-200">Manual Order</div>
+                      <div className="mt-0.5 text-[11px] font-medium uppercase tracking-[0.14em] text-slate-500">Submit to live matching engine</div>
+                    </div>
+                  </div>
+                  <div className="space-y-3 p-4">
+                    {/* Symbol */}
+                    <div>
+                      <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500" htmlFor="ex-symbol">Symbol</label>
+                      <select
+                        id="ex-symbol"
+                        value={orderSymbol}
+                        onChange={(e) => setOrderSymbol(e.target.value)}
+                        className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-xs text-white focus:border-cyan-400 focus:outline-none"
+                      >
+                        {EXCHANGE_SYMBOLS.map((s) => <option key={s} value={s}>{s}</option>)}
+                      </select>
+                    </div>
+                    {/* Side */}
+                    <div>
+                      <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500">Side</label>
+                      <div className="flex gap-2">
+                        {(["BUY", "SELL"] as const).map((s) => (
+                          <button
+                            key={s}
+                            type="button"
+                            onClick={() => setOrderSide(s)}
+                            className={`flex-1 rounded-md border py-2 text-xs font-bold transition ${
+                              orderSide === s
+                                ? s === "BUY"
+                                  ? "border-emerald-400 bg-emerald-400/10 text-emerald-400"
+                                  : "border-rose-400 bg-rose-400/10 text-rose-400"
+                                : "border-slate-700 text-slate-500 hover:border-slate-500 hover:text-slate-300"
+                            }`}
+                          >{s}</button>
+                        ))}
+                      </div>
+                    </div>
+                    {/* Qty + Price */}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500" htmlFor="ex-qty">Quantity</label>
+                        <input id="ex-qty" type="number" min="1" value={orderQty} onChange={(e) => setOrderQty(e.target.value)}
+                          className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-xs text-white focus:border-cyan-400 focus:outline-none" />
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500" htmlFor="ex-price">Price (USD)</label>
+                        <input id="ex-price" type="number" min="0.01" step="0.01" value={orderPrice} onChange={(e) => setOrderPrice(e.target.value)}
+                          className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-xs text-white focus:border-cyan-400 focus:outline-none" />
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      id="exchange-submit-order"
+                      onClick={submitExchangeOrder}
+                      disabled={!exchangeOnline}
+                      className={`w-full rounded-md px-4 py-2.5 text-xs font-black uppercase tracking-wider transition ${
+                        exchangeOnline
+                          ? "cursor-pointer bg-gradient-to-r from-cyan-500 to-blue-500 text-white hover:from-cyan-400 hover:to-blue-400 shadow-lg shadow-cyan-500/20"
+                          : "cursor-not-allowed bg-slate-800 text-slate-600"
+                      }`}
+                    >
+                      {exchangeOnline ? `Submit ${orderSide} Order` : "Exchange Offline"}
+                    </button>
+                    {orderMsg && (
+                      <div className={`rounded-md px-3 py-2 text-[11px] font-semibold ${
+                        orderMsg.ok ? "bg-emerald-500/10 text-emerald-400" : "bg-rose-500/10 text-rose-400"
+                      }`}>{orderMsg.text}</div>
+                    )}
+                  </div>
+                </div>
+              </Reveal>
+
+              {/* Exchange status tile */}
+              <Reveal>
+                <div className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/70 shadow-xl shadow-black/10">
+                  <div className="flex items-center gap-3 border-b border-slate-800 px-4 py-3">
+                    <div className="grid size-8 place-items-center rounded-lg border border-slate-700 bg-slate-800 text-cyan-400">
+                      <Icon name="database" />
+                    </div>
+                    <div className="text-xs font-bold uppercase tracking-wider text-slate-200">System Status</div>
+                  </div>
+                  <div className="grid grid-cols-2 divide-x divide-y divide-slate-800">
+                    {[
+                      ["Exchange API", exchangeOnline ? "Online" : "Offline", exchangeOnline ? "text-emerald-400" : "text-rose-400"],
+                      ["Engine Connected", exchangeHealth?.engine_connected ? "Yes" : "No", exchangeHealth?.engine_connected ? "text-emerald-400" : "text-amber-400"],
+                      ["Trades in DB", String(exchangeHealth?.db_trade_count ?? "—"), "text-slate-300"],
+                      ["In-memory trades", String(exchangeHealth?.trades_in_memory ?? "—"), "text-slate-300"],
+                      ["Active traders", String(liveTraders.length), "text-cyan-400"],
+                      ["Total volume", liveTrades.reduce((a, t) => a + t.quantity, 0).toLocaleString(), "text-slate-300"],
+                    ].map(([label, value, color]) => (
+                      <div key={label} className="px-4 py-3">
+                        <div className="text-[10px] font-bold uppercase tracking-wider text-slate-600">{label}</div>
+                        <div className={`mt-1 font-mono text-sm font-black ${color}`}>{value}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </Reveal>
+            </div>
+
+          </div>
+        </section>
 
         <footer className="flex flex-col gap-2 px-1 py-6 text-[10px] font-medium uppercase tracking-wider text-slate-600 sm:flex-row sm:items-center sm:justify-between">
           <span>TickForge observability console · Controller isolated from matching path</span>
