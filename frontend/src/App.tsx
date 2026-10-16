@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
+import Journey from "./Journey";
 import { sp500 } from "./sp500";
 import { scrollToSection, useActiveSection, useInView, useSmoothScroll } from "./scroll";
 import { getStockSnapshot, StockApiError, type StockSnapshot } from "./stockApi";
@@ -129,7 +130,7 @@ function Panel({
   return (
     <section
       ref={ref}
-      className={`reveal ${shown ? "reveal-in" : ""} overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/70 shadow-xl shadow-black/10 backdrop-blur-sm ${className}`}
+      className={`reveal ${shown ? "reveal-in" : ""} overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/70 shadow-xl shadow-black/10 ${className}`}
     >
       <div className="flex items-center justify-between gap-2 border-b border-slate-800 px-4 py-3">
         <div className="flex items-center gap-3">
@@ -160,7 +161,7 @@ const fmtInt = (n: number) => Math.round(n).toLocaleString();
 
 type ChartMode = "line" | "candles";
 
-function PriceChart({ snapshot }: { snapshot: StockSnapshot }) {
+const PriceChart = memo(function PriceChart({ snapshot }: { snapshot: StockSnapshot }) {
   const [mode, setMode] = useState<ChartMode>("line");
   const [hover, setHover] = useState<{ index: number; frac: number } | null>(null);
   const boxRef = useRef<HTMLDivElement>(null);
@@ -290,7 +291,7 @@ function PriceChart({ snapshot }: { snapshot: StockSnapshot }) {
       </div>
     </div>
   );
-}
+});
 
 // Engine flow. The first FLOW_STAGES entries exist today; the rest are planned.
 const stages = [
@@ -378,7 +379,11 @@ const navSections = [
   { id: "overview", label: "Overview" },
   { id: "engine", label: "Engine" },
   { id: "market", label: "Market" },
+
   { id: "exchange", label: "Exchange" },
+
+  { id: "journey", label: "Journey" },
+
   { id: "how", label: "How it works" },
 ];
 const navIds = navSections.map((section) => section.id);
@@ -760,7 +765,7 @@ function App() {
       <div className="bg-blob blob-a" aria-hidden="true" />
       <div className="bg-blob blob-b" aria-hidden="true" />
 
-      <header className="sticky top-0 z-50 border-b border-slate-800/80 bg-slate-950/70 backdrop-blur-xl">
+      <header className="sticky top-0 z-50 border-b border-slate-800/80 bg-slate-950/90">
         <div className="mx-auto flex max-w-[1500px] flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2.5 lg:px-8">
           <button type="button" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })} className="flex items-center gap-2.5 text-left" aria-label="Back to top">
             <div className="relative grid size-9 place-items-center overflow-hidden rounded-lg bg-gradient-to-br from-cyan-400 to-blue-400 text-slate-950">
@@ -1276,6 +1281,27 @@ function App() {
               </div>
             )}
           </Panel>
+          </div>
+        </section>
+
+        <section id="journey" className="scroll-mt-24 pb-16">
+          <SectionHead
+            title="Journey"
+            text="How the selected stock moved: when it rose, when it fell, and the numbers behind it. Built from real Yahoo price history."
+            aside={
+              <div className="flex items-center gap-3 rounded-lg border border-slate-800 bg-slate-950/70 px-3 py-2">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-600">Symbol</span>
+                <span className="font-mono text-sm font-black text-cyan-400">{selectedSymbol}</span>
+                <button type="button" onClick={() => scrollToSection("market")} className="cursor-pointer rounded border border-slate-700 bg-slate-800 px-2 py-1 text-[11px] font-bold text-slate-300 transition hover:border-slate-500">
+                  Change
+                </button>
+              </div>
+            }
+          />
+          <div className="grid grid-cols-12 items-start gap-5">
+            <Panel title={`${selectedSymbol} Journey`} eyebrow="Real price history · rule-based story" icon="clock" className="col-span-12" action={<Badge kind="live" label="REAL DATA" />}>
+              <Journey symbol={selectedSymbol} />
+            </Panel>
           </div>
         </section>
       </div>

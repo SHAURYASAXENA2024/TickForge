@@ -18,6 +18,12 @@ function innerCanScroll(start: Element | null, deltaY: number): boolean {
   return false;
 }
 
+// Feel of the glide. Each frame covers GLIDE_EASE of the remaining distance (higher = snappier),
+// and every wheel tick is multiplied by WHEEL_GAIN (higher = travels further per tick).
+export const GLIDE_EASE = 0.22;
+export const WHEEL_GAIN = 1.3;
+const MIN_STEP = 2; // px per frame, so the last few pixels never crawl
+
 /**
  * Inertia ("glide") scrolling for mouse wheels and trackpads.
  * - Touch devices and reduced-motion users keep native scrolling.
@@ -40,7 +46,7 @@ export function useSmoothScroll() {
         raf = 0;
         return;
       }
-      const step = Math.sign(distance) * Math.min(Math.abs(distance), Math.max(1, Math.abs(distance) * 0.1));
+      const step = Math.sign(distance) * Math.min(Math.abs(distance), Math.max(MIN_STEP, Math.abs(distance) * GLIDE_EASE));
       window.scrollTo(0, window.scrollY + step);
       raf = requestAnimationFrame(tick);
     };
@@ -52,7 +58,7 @@ export function useSmoothScroll() {
       event.preventDefault();
       const unit = event.deltaMode === 1 ? 16 : 1;
       const base = raf ? target : window.scrollY;
-      target = Math.min(maxScroll(), Math.max(0, base + event.deltaY * unit));
+      target = Math.min(maxScroll(), Math.max(0, base + event.deltaY * unit * WHEEL_GAIN));
       if (!raf) raf = requestAnimationFrame(tick);
     };
 
