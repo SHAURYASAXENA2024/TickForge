@@ -99,18 +99,18 @@ input:focus-visible {
   background: linear-gradient(90deg, var(--color-cyan-500), var(--color-blue-400));
 }
 
+/* Soft glows made from radial gradients: far cheaper to paint than a blur() filter on a huge element. */
 .bg-blob {
   position: fixed;
   z-index: -10;
-  width: 38rem;
-  height: 38rem;
+  width: 46rem;
+  height: 46rem;
   border-radius: 50%;
-  filter: blur(110px);
-  opacity: 0.16;
   pointer-events: none;
+  will-change: transform;
 }
-.blob-a { left: -12rem; top: 8rem; background: var(--color-cyan-500); }
-.blob-b { right: -14rem; top: 34rem; background: var(--color-blue-500); }
+.blob-a { left: -14rem; top: 6rem; background: radial-gradient(circle closest-side, color-mix(in srgb, var(--color-cyan-500) 22%, transparent), transparent); }
+.blob-b { right: -16rem; top: 32rem; background: radial-gradient(circle closest-side, color-mix(in srgb, var(--color-blue-500) 16%, transparent), transparent); }
 
 @supports (animation-timeline: scroll()) {
   .scroll-progress { animation: progress-grow linear both; animation-timeline: scroll(root); }
