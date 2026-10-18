@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { getJourney, StockApiError, type JourneyData, type JourneyEvent, type JourneyLongTerm, type JourneyRange } from "./stockApi";
+import { getJourney, StockApiError, type JourneyData, type JourneyEvent, type JourneyRange } from "./stockApi";
 
 const RANGES: { id: JourneyRange; label: string }[] = [
   { id: "1d", label: "1D" },
@@ -7,7 +7,6 @@ const RANGES: { id: JourneyRange; label: string }[] = [
   { id: "1mo", label: "1M" },
   { id: "6mo", label: "6M" },
   { id: "1y", label: "1Y" },
-  { id: "max", label: "MAX" },
 ];
 
 const KIND_STYLE: Record<JourneyEvent["kind"], { dot: string; tag: string; name: string }> = {
@@ -18,7 +17,6 @@ const KIND_STYLE: Record<JourneyEvent["kind"], { dot: string; tag: string; name:
   low: { dot: "bg-rose-400", tag: "text-rose-400", name: "LOW" },
   volume: { dot: "bg-blue-400", tag: "text-blue-400", name: "VOLUME" },
   close: { dot: "bg-cyan-400", tag: "text-cyan-400", name: "CLOSE" },
-  split: { dot: "bg-violet-400", tag: "text-violet-400", name: "SPLIT" },
 };
 
 // Attributes that need a trade ledger. Yahoo does not say who bought or sold, so these stay empty on purpose.
@@ -26,18 +24,13 @@ const LEDGER_FIELDS = ["Bought", "Sold", "Net position", "Avg buy price", "Avg s
 
 // Same format as the story sentences written by the API: "$1,234.50" for USD, "1,234.50 INR" otherwise.
 const money = (value: number, currency: string) => {
-  const digits = Math.abs(value) < 1 ? 4 : 2; // split-adjusted early prices can be a few cents
-  const text = value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: digits });
+  const text = value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   return currency === "USD" ? `$${text}` : `${text} ${currency}`;
 };
 const pct = (value: number) => `${value > 0 ? "+" : ""}${value.toFixed(2)}%`;
 const tone = (value: number) => (value >= 0 ? "text-emerald-400" : "text-rose-400");
 const compact = (value: number) => new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(value);
 const DASH = "—";
-// Split-adjusted prices from decades ago can be a few cents, so show more digits below $1.
-const px = (value: number) => value.toFixed(Math.abs(value) < 1 ? 4 : 2);
-const duration = (days: number) => (days >= 365 ? `${(days / 365.25).toFixed(1)} yrs` : `${days} days`);
-const splitRatio = (ratio: number) => (ratio >= 1 ? `${ratio}:1` : `1:${Math.round(1 / ratio)}`);
 
 type Focus = { from: string; to: string } | null;
 
@@ -51,7 +44,7 @@ function Tile({ label, value, sub, valueClass = "text-white" }: { label: string;
   );
 }
 
-function JourneyChart({ data, focus, log }: { data: JourneyData; focus: Focus; log: boolean }) {
+function JourneyChart({ data, focus }: { data: JourneyData; focus: Focus }) {
   const [hover, setHover] = useState<number | null>(null);
   const boxRef = useRef<HTMLDivElement>(null);
 
@@ -61,16 +54,11 @@ function JourneyChart({ data, focus, log }: { data: JourneyData; focus: Focus; l
   const low = Math.min(...bars.map((b) => b.low));
   const high = Math.max(...bars.map((b) => b.high));
   const span = high - low || 1;
-  // Log scale: equal vertical distance = equal % move, so a 1980s rally is as visible as a 2020s one.
-  const logLow = Math.log(Math.max(low, Math.min(...bars.map((b) => b.low).filter((v) => v > 0)), 1e-9));
-  const logSpan = Math.log(Math.max(high, 1e-9)) - logLow || 1;
   const maxVolume = Math.max(1, ...bars.map((b) => b.volume));
   const spikeTimes = useMemo(() => new Set(data.volume.spikes.map((s) => s.time)), [data.volume.spikes]);
 
   const x = (i: number) => (n === 1 ? 50 : (i / (n - 1)) * 100);
-  const unit = (price: number) => (log ? (Math.log(Math.max(price, 1e-9)) - logLow) / logSpan : (price - low) / span);
-  const y = (price: number) => 72 - unit(price) * 66; // price zone: 6..72, volume zone: 82..100
-  const priceAt = (line: number) => (log ? Math.exp(logLow + ((72 - line) / 66) * logSpan) : low + ((72 - line) / 66) * span);
+  const y = (price: number) => 72 - ((price - low) / span) * 66; // price zone: 6..72, volume zone: 82..100
   const linePoints = bars.map((b, i) => `${x(i)},${y(b.close)}`).join(" ");
   const up = data.close >= data.open;
   const accent = up ? "var(--color-emerald-400)" : "var(--color-rose-400)";
@@ -82,18 +70,8 @@ function JourneyChart({ data, focus, log }: { data: JourneyData; focus: Focus; l
     const left = x(Math.min(a, b));
     return { left, width: Math.max(Math.abs(x(b) - x(a)), 0.8) };
   };
-  const longTerm = data.longTerm;
-  const lastTime = bars[n - 1].timestamp;
-  // MAX shows each of the biggest falls (peak to recovery); the shorter ranges show the single biggest fall and rise.
-  const fallBands = longTerm
-    ? longTerm.drawdowns.map((d) => band(d.start.time, d.recoveredAt?.time ?? lastTime)).filter((b) => b !== null)
-    : data.maxDrawdown
-      ? [band(data.maxDrawdown.start.time, data.maxDrawdown.end.time)].filter((b) => b !== null)
-      : [];
-  const runUpBand = !longTerm && data.maxRunUp ? band(data.maxRunUp.start.time, data.maxRunUp.end.time) : null;
-  const splitMarks = (longTerm?.splits ?? [])
-    .map((s) => ({ ...s, i: indexOf.get(s.barTime) }))
-    .filter((s): s is typeof s & { i: number } => s.i !== undefined);
+  const drawdownBand = data.maxDrawdown ? band(data.maxDrawdown.start.time, data.maxDrawdown.end.time) : null;
+  const runUpBand = data.maxRunUp ? band(data.maxRunUp.start.time, data.maxRunUp.end.time) : null;
   const focusBand = focus ? band(focus.from, focus.to) : null;
 
   const highIndex = indexOf.get(data.high.time);
@@ -135,12 +113,7 @@ function JourneyChart({ data, focus, log }: { data: JourneyData; focus: Focus; l
               <line key={line} x1="0" x2="100" y1={line} y2={line} stroke="var(--color-slate-800)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
             ))}
             {runUpBand && <rect data-testid="runup-band" x={runUpBand.left} y="2" width={runUpBand.width} height="72" fill="var(--color-emerald-400)" opacity="0.1" />}
-            {fallBands.map((b) => (
-              <rect key={b.left} data-testid="drawdown-band" x={b.left} y="2" width={b.width} height="72" fill="var(--color-rose-400)" opacity="0.13" />
-            ))}
-            {splitMarks.map((s) => (
-              <line key={s.time} data-testid="split-mark" x1={x(s.i)} x2={x(s.i)} y1="2" y2="76" stroke="var(--color-violet-400)" strokeWidth="1" strokeDasharray="3 3" vectorEffect="non-scaling-stroke" />
-            ))}
+            {drawdownBand && <rect data-testid="drawdown-band" x={drawdownBand.left} y="2" width={drawdownBand.width} height="72" fill="var(--color-rose-400)" opacity="0.13" />}
             {n > 1 && <polygon points={`0,76 ${linePoints} 100,76`} fill={`url(#journey-fill-${data.symbol})`} />}
             <polyline points={linePoints} fill="none" stroke={accent} strokeWidth="1.6" vectorEffect="non-scaling-stroke" />
             {bars.map((b, i) => (
@@ -158,24 +131,14 @@ function JourneyChart({ data, focus, log }: { data: JourneyData; focus: Focus; l
             {focusBand && <rect data-testid="focus-band" x={focusBand.left} y="0" width={focusBand.width} height="100" fill="var(--color-cyan-400)" opacity="0.22" />}
           </svg>
 
-          {[6, 28, 50, 72].map((line) => (
-            <span key={line} className="pointer-events-none absolute right-0 -translate-y-1/2 rounded bg-slate-950/70 px-1 font-mono text-[9px] text-slate-500" style={{ top: `${line}%` }}>
-              {px(priceAt(line))}
-            </span>
-          ))}
-          {splitMarks.map((s) => (
-            <span key={s.time} title={`${s.text} split, ${s.label}`} className="pointer-events-none absolute top-0 -translate-x-1/2 -translate-y-full rounded bg-violet-500/15 px-1 font-mono text-[9px] font-bold text-violet-300" style={{ left: `${x(s.i)}%` }}>
-              {splitRatio(s.ratio)}
-            </span>
-          ))}
           {highIndex !== undefined && (
             <div className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-full" style={{ left: `${x(highIndex)}%`, top: `${y(data.high.price)}%` }}>
-              <span data-testid="marker-high" className="whitespace-nowrap rounded bg-emerald-500/15 px-1.5 py-0.5 font-mono text-[10px] font-bold text-emerald-400">High {px(data.high.price)}</span>
+              <span data-testid="marker-high" className="whitespace-nowrap rounded bg-emerald-500/15 px-1.5 py-0.5 font-mono text-[10px] font-bold text-emerald-400">High {data.high.price.toFixed(2)}</span>
             </div>
           )}
           {lowIndex !== undefined && (
             <div className="pointer-events-none absolute z-10 -translate-x-1/2" style={{ left: `${x(lowIndex)}%`, top: `${y(data.low.price)}%` }}>
-              <span data-testid="marker-low" className="whitespace-nowrap rounded bg-rose-500/15 px-1.5 py-0.5 font-mono text-[10px] font-bold text-rose-400">Low {px(data.low.price)}</span>
+              <span data-testid="marker-low" className="whitespace-nowrap rounded bg-rose-500/15 px-1.5 py-0.5 font-mono text-[10px] font-bold text-rose-400">Low {data.low.price.toFixed(2)}</span>
             </div>
           )}
           {[{ i: 0, price: bars[0].open }, { i: n - 1, price: bars[n - 1].close }].map((dot) => (
@@ -192,10 +155,10 @@ function JourneyChart({ data, focus, log }: { data: JourneyData; focus: Focus; l
             >
               <div className="mb-1 font-bold text-slate-200">{hovered.label}</div>
               <div className="grid grid-cols-[auto_1fr] gap-x-3 text-slate-400">
-                <span>O</span><span className="text-right text-slate-200">{px(hovered.open)}</span>
-                <span>H</span><span className="text-right text-slate-200">{px(hovered.high)}</span>
-                <span>L</span><span className="text-right text-slate-200">{px(hovered.low)}</span>
-                <span>C</span><span className="text-right text-slate-200">{px(hovered.close)}</span>
+                <span>O</span><span className="text-right text-slate-200">{hovered.open.toFixed(2)}</span>
+                <span>H</span><span className="text-right text-slate-200">{hovered.high.toFixed(2)}</span>
+                <span>L</span><span className="text-right text-slate-200">{hovered.low.toFixed(2)}</span>
+                <span>C</span><span className="text-right text-slate-200">{hovered.close.toFixed(2)}</span>
                 <span>Vol</span><span className="text-right text-slate-200">{hovered.volume.toLocaleString()}</span>
               </div>
             </div>
@@ -208,174 +171,12 @@ function JourneyChart({ data, focus, log }: { data: JourneyData; focus: Focus; l
         </div>
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-slate-500">
-        <span className="flex items-center gap-1.5"><i className="inline-block h-2.5 w-3 rounded-sm bg-rose-400/30" /> {longTerm ? `${longTerm.drawdowns.length} biggest falls, peak to recovery` : "Biggest fall"}</span>
-        {!longTerm && <span className="flex items-center gap-1.5"><i className="inline-block h-2.5 w-3 rounded-sm bg-emerald-400/25" /> Biggest rise</span>}
-        {splitMarks.length > 0 && <span className="flex items-center gap-1.5"><i className="inline-block h-2.5 w-0 border-l border-dashed border-violet-400" /> Stock split</span>}
-        <span>{log ? "Log scale" : "Linear scale"}</span>
+        <span className="flex items-center gap-1.5"><i className="inline-block h-2.5 w-3 rounded-sm bg-rose-400/30" /> Biggest fall</span>
+        <span className="flex items-center gap-1.5"><i className="inline-block h-2.5 w-3 rounded-sm bg-emerald-400/25" /> Biggest rise</span>
         <span className="flex items-center gap-1.5"><i className="inline-block h-2.5 w-3 rounded-sm bg-blue-400" /> Volume spike</span>
         <span className="ml-auto">{n} bars · hover the chart, or hover a timeline row to highlight it</span>
       </div>
     </div>
-  );
-}
-
-function YearlyReturns({ years }: { years: JourneyLongTerm["years"] }) {
-  const [hover, setHover] = useState<number | null>(null);
-  const top = Math.max(1, ...years.map((y) => Math.abs(y.percent)));
-  const w = 100 / years.length;
-  const shown = hover !== null ? years[hover] : null;
-  return (
-    <div>
-      <div className="mb-2 flex items-baseline justify-between gap-3">
-        <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Return by calendar year</div>
-        <div className="font-mono text-[11px] text-slate-400" aria-live="polite">
-          {shown ? (
-            <>
-              {shown.year}: <span className={tone(shown.percent)}>{pct(shown.percent)}</span>
-              {shown.partial && <span className="text-slate-500"> (partial year)</span>}
-            </>
-          ) : (
-            "Hover a bar"
-          )}
-        </div>
-      </div>
-      <svg className="h-36 w-full" viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label={`Yearly returns from ${years[0]?.year} to ${years[years.length - 1]?.year}`} onPointerLeave={() => setHover(null)}>
-        <line x1="0" x2="100" y1="50" y2="50" stroke="var(--color-slate-700)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
-        {years.map((y, i) => {
-          const h = (Math.abs(y.percent) / top) * 48;
-          return (
-            <rect
-              key={y.year}
-              data-testid="year-bar"
-              x={i * w + w * 0.15}
-              width={w * 0.7}
-              y={y.percent >= 0 ? 50 - h : 50}
-              height={Math.max(h, 0.4)}
-              fill={y.percent >= 0 ? "var(--color-emerald-400)" : "var(--color-rose-400)"}
-              opacity={hover === i ? 1 : y.partial ? 0.35 : 0.75}
-              onPointerEnter={() => setHover(i)}
-            >
-              <title>{`${y.year}: ${pct(y.percent)}${y.partial ? " (partial year)" : ""}`}</title>
-            </rect>
-          );
-        })}
-      </svg>
-      <div className="mt-1 flex justify-between font-mono text-[10px] text-slate-600">
-        <span>{years[0]?.year}</span>
-        <span>Faded bars are partial years · scale ±{top.toFixed(0)}%</span>
-        <span>{years[years.length - 1]?.year}</span>
-      </div>
-    </div>
-  );
-}
-
-function SinceListing({ lt, currency, lastLabel, onFocus }: { lt: JourneyLongTerm; currency: string; lastLabel: string; onFocus: (f: Focus) => void }) {
-  const yearTile = (label: string, y: JourneyLongTerm["bestYear"]) => (
-    <Tile label={label} value={y ? pct(y.percent) : DASH} valueClass={y ? tone(y.percent) : "text-white"} sub={y ? `Calendar ${y.year} (full years only)` : "Needs a full calendar year"} />
-  );
-  return (
-    <section data-testid="since-listing" aria-label="Since listing" className="space-y-4 rounded-xl border border-violet-500/20 bg-violet-500/[0.03] p-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="text-[11px] font-bold uppercase tracking-wider text-violet-300">Since listing</div>
-        <span className="rounded border border-slate-700 bg-slate-800 px-1.5 py-1 font-mono text-[10px] font-bold tracking-wider text-slate-400">WEEKLY BARS · ADJUSTED PRICES</span>
-      </div>
-
-      <div className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-slate-800 bg-slate-800 lg:grid-cols-4">
-        <Tile label="First traded (per Yahoo)" value={lt.firstTraded.label} sub={`${lt.yearsListed.toFixed(1)} years of history · first price ${money(lt.firstTraded.price, currency)} adjusted`} />
-        <Tile label="Total return" value={pct(lt.totalReturnPercent)} valueClass={tone(lt.totalReturnPercent)} sub="First open to latest close, dividends reinvested" />
-        <Tile label="Yearly growth (CAGR)" value={lt.cagrPercent !== null ? pct(lt.cagrPercent) : DASH} valueClass={lt.cagrPercent !== null ? tone(lt.cagrPercent) : "text-white"} sub={lt.cagrPercent !== null ? "Compound annual growth rate" : "Needs at least one year of history"} />
-        <Tile label="$1,000 at the start" value={money(lt.growthOf1000, currency)} valueClass={tone(lt.growthOf1000 - 1000)} sub={`Worth this at ${lastLabel}, before taxes and fees`} />
-        <Tile label="All-time high" value={money(lt.allTimeHigh.price, currency)} sub={`${lt.allTimeHigh.label} · latest close is ${pct(lt.fromAllTimeHighPercent)} from it`} />
-        <Tile label="All-time low" value={money(lt.allTimeLow.price, currency)} sub={lt.allTimeLow.label} />
-        {yearTile("Best year", lt.bestYear)}
-        {yearTile("Worst year", lt.worstYear)}
-      </div>
-
-      {lt.years.length > 0 && <YearlyReturns years={lt.years} />}
-
-      <div>
-        <div className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-500">The {lt.drawdowns.length} biggest falls</div>
-        {lt.drawdowns.length === 0 ? (
-          <p className="text-xs text-slate-500">The price never closed below an earlier close.</p>
-        ) : (
-          <div className="overflow-x-auto rounded-xl border border-slate-800">
-            <table className="w-full min-w-[36rem] text-left text-xs">
-              <thead className="bg-slate-900 text-[10px] uppercase tracking-wider text-slate-500">
-                <tr>
-                  <th className="px-3 py-2 font-bold">Fall</th>
-                  <th className="px-3 py-2 font-bold">Peak</th>
-                  <th className="px-3 py-2 font-bold">Bottom</th>
-                  <th className="px-3 py-2 font-bold">Back to peak</th>
-                  <th className="px-3 py-2 text-right font-bold">Peak to bottom</th>
-                  <th className="px-3 py-2 text-right font-bold">Peak to recovery</th>
-                </tr>
-              </thead>
-              <tbody>
-                {lt.drawdowns.map((d) => {
-                  const f = { from: d.start.time, to: d.recoveredAt?.time ?? d.bottom.time };
-                  return (
-                    <tr
-                      key={d.start.time}
-                      tabIndex={0}
-                      onMouseEnter={() => onFocus(f)}
-                      onMouseLeave={() => onFocus(null)}
-                      onFocus={() => onFocus(f)}
-                      onBlur={() => onFocus(null)}
-                      className="border-t border-slate-800 font-mono text-slate-300 outline-none transition hover:bg-slate-800/50 focus-visible:bg-slate-800/70"
-                    >
-                      <td className="px-3 py-2 font-bold text-rose-400">{pct(d.percent)}</td>
-                      <td className="px-3 py-2">{d.start.label} <span className="text-slate-500">{px(d.start.price)}</span></td>
-                      <td className="px-3 py-2">{d.bottom.label} <span className="text-slate-500">{px(d.bottom.price)}</span></td>
-                      <td className="px-3 py-2">{d.recoveredAt ? d.recoveredAt.label : <span className="text-amber-400">Not yet</span>}</td>
-                      <td className="px-3 py-2 text-right">{duration(d.daysToBottom)}</td>
-                      <td className="px-3 py-2 text-right">{d.daysToRecover !== null ? duration(d.daysToRecover) : DASH}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-        <p className="mt-1.5 text-[11px] text-slate-500">Weekly closes. Hover a row to highlight that fall on the chart.</p>
-      </div>
-
-      <div className="grid gap-4 md:grid-cols-2">
-        <div>
-          <div className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-500">Stock splits</div>
-          {lt.splits.length === 0 ? (
-            <p className="text-xs text-slate-500">No splits in Yahoo's history for this symbol.</p>
-          ) : (
-            <ul className="space-y-1 font-mono text-xs text-slate-300">
-              {lt.splits.map((s) => (
-                <li key={s.time} className="flex justify-between gap-3 rounded border border-slate-800 bg-slate-900/60 px-2.5 py-1.5">
-                  <span>{s.label}</span>
-                  <span className="font-bold text-violet-300">{s.text}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-        <div>
-          <div className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-500">Dividends</div>
-          {lt.dividends.count === 0 || !lt.dividends.last ? (
-            <p className="text-xs text-slate-500">No dividends in Yahoo's history for this symbol.</p>
-          ) : (
-            <div className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-slate-800 bg-slate-800">
-              <Tile label="Payments" value={String(lt.dividends.count)} sub={`In ${lt.dividends.byYear.length} of ${lt.years.length} calendar years`} />
-              <Tile label="Latest" value={money(lt.dividends.last.amount, currency)} sub={`Per share, ${lt.dividends.last.label}`} />
-              <Tile label="Total per share" value={money(lt.dividends.totalPerShare, currency)} sub="Split-adjusted, all years" />
-              <Tile label="First paid" value={String(lt.dividends.byYear[0]?.year ?? DASH)} sub="Earliest year in Yahoo's data" />
-            </div>
-          )}
-        </div>
-      </div>
-
-      <ul className="space-y-1 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-[11px] leading-relaxed text-amber-200/80">
-        {lt.notes.map((note) => (
-          <li key={note}>• {note}</li>
-        ))}
-      </ul>
-    </section>
   );
 }
 
@@ -385,7 +186,6 @@ function Journey({ symbol }: { symbol: string }) {
   const [status, setStatus] = useState<"loading" | "online" | "stale" | "error">("loading");
   const [error, setError] = useState<{ kind: StockApiError["kind"]; message: string } | null>(null);
   const [focus, setFocus] = useState<Focus>(null);
-  const [log, setLog] = useState(false);
 
   // Clear on symbol/range change; keep the last good data if a later refresh fails.
   useEffect(() => {
@@ -451,26 +251,10 @@ function Journey({ symbol }: { symbol: string }) {
               key={item.id}
               type="button"
               aria-pressed={range === item.id}
-              onClick={() => {
-                setRange(item.id);
-                setLog(item.id === "max"); // decades of growth only read well on a log scale; the user can switch back
-              }}
+              onClick={() => setRange(item.id)}
               className={`cursor-pointer rounded px-3 py-1.5 text-xs font-bold transition ${range === item.id ? "bg-slate-700 text-white" : "text-slate-500 hover:text-slate-300"}`}
             >
               {item.label}
-            </button>
-          ))}
-        </div>
-        <div className="ml-auto flex rounded-lg border border-slate-800 bg-slate-950/70 p-1" role="group" aria-label="Price scale">
-          {[false, true].map((value) => (
-            <button
-              key={String(value)}
-              type="button"
-              aria-pressed={log === value}
-              onClick={() => setLog(value)}
-              className={`cursor-pointer rounded px-2.5 py-1.5 text-[11px] font-bold transition ${log === value ? "bg-slate-700 text-white" : "text-slate-500 hover:text-slate-300"}`}
-            >
-              {value ? "Log" : "Linear"}
             </button>
           ))}
         </div>
@@ -526,7 +310,7 @@ function Journey({ symbol }: { symbol: string }) {
           </div>
 
           <div className="grid gap-6 lg:grid-cols-[2fr_1fr]">
-            <JourneyChart data={current} focus={focus} log={log} />
+            <JourneyChart data={current} focus={focus} />
             <div>
               <div className="mb-2 flex items-center justify-between">
                 <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">The story, in order</div>
@@ -560,8 +344,6 @@ function Journey({ symbol }: { symbol: string }) {
               </ol>
             </div>
           </div>
-
-          {current.longTerm && <SinceListing lt={current.longTerm} currency={c} lastLabel={current.periodEnd.label} onFocus={setFocus} />}
 
           <div className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-slate-800 bg-slate-800 lg:grid-cols-4">
             <Tile label="Up / down / flat bars" value={`${current.bars.up} / ${current.bars.down} / ${current.bars.flat}`} sub={`${current.interval} bars, close versus open`} />
