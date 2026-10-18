@@ -1,3 +1,4 @@
+//B-TREE used here because it's efficient and fast for lookups and insertion, stores data in sorted manner in memory
 use crate::record::TradeRecord;
 use std::collections::BTreeMap;
 
