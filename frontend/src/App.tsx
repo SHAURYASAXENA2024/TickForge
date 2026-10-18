@@ -1,4 +1,6 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { WhyChip } from "./HowzThat";
+import { Link, researchPath } from "./router";
 import Journey from "./Journey";
 import { sp500 } from "./sp500";
 import { scrollToSection, useActiveSection, useInView, useSmoothScroll } from "./scroll";
@@ -324,6 +326,8 @@ const workingToday = [
   "Live trade tape",
   "Real market data (Yahoo)",
   "Line + candlestick charts",
+  "Journey incl. MAX since listing",
+  "how'z that! research page",
 ];
 
 const roadmap = [
@@ -337,6 +341,7 @@ const roadmap = [
   "Engine sharding",
   "Replication / failover",
   "Cross-thread order trace",
+  "Lock-free vs mutex benchmark",
 ];
 
 const LAT_BUCKETS_SHOWN = 16;
@@ -367,116 +372,8 @@ const navSections = [
   { id: "engine", label: "Engine" },
   { id: "market", label: "Market" },
   { id: "journey", label: "Journey" },
-  { id: "how", label: "How it works" },
 ];
 const navIds = navSections.map((section) => section.id);
-
-const flowSteps = [
-  { title: "Producers submit orders", body: "Four threads create buy and sell orders and hand them to the queue. No thread ever waits on a lock.", planned: false },
-  { title: "The MPSC queue collects them", body: "Many producers, one consumer. A lock-free queue lets every thread enqueue without blocking the others.", planned: false },
-  { title: "One matcher thread decides", body: "A single thread takes orders in arrival order, so results are repeatable and the book needs no locks.", planned: false },
-  { title: "The order book updates", body: "Best price first, oldest order first at the same price. Unmatched quantity rests on the book.", planned: false },
-  { title: "A trade event is emitted", body: "Each match becomes a trade with a price, a quantity and both order IDs. This is what the console streams.", planned: false },
-  { title: "Storage is the next milestone", body: "A write-ahead log and an LSM-tree are planned so trades survive a crash. They are not built yet.", planned: true },
-];
-
-// Pinned scroll story: the stage stays on screen while scroll progress walks through the order's journey.
-function PinnedFlow() {
-  const trackRef = useRef<HTMLElement>(null);
-  const [progress, setProgress] = useState(0);
-
-  useEffect(() => {
-    let frame = 0;
-    const update = () => {
-      frame = 0;
-      const el = trackRef.current;
-      if (!el) return;
-      const rect = el.getBoundingClientRect();
-      const span = rect.height - window.innerHeight;
-      const value = span > 0 ? Math.min(1, Math.max(0, -rect.top / span)) : 0;
-      setProgress(Math.round(value * 1000) / 1000);
-    };
-    const onScroll = () => {
-      if (!frame) frame = requestAnimationFrame(update);
-    };
-    update();
-    window.addEventListener("scroll", onScroll, { passive: true });
-    window.addEventListener("resize", onScroll);
-    return () => {
-      window.removeEventListener("scroll", onScroll);
-      window.removeEventListener("resize", onScroll);
-      cancelAnimationFrame(frame);
-    };
-  }, []);
-
-  const step = Math.min(flowSteps.length - 1, Math.floor(progress * flowSteps.length));
-  const lastLit = flowSteps[step].planned ? stages.length - 1 : step;
-
-  return (
-    <section id="how" ref={trackRef} className="relative scroll-mt-16" style={{ height: `${flowSteps.length * 60 + 100}vh` }}>
-      <div className="sticky top-16 flex h-[calc(100vh-4rem)] items-center">
-        <div className="mx-auto grid w-full max-w-[1500px] items-center gap-8 px-4 lg:grid-cols-[1.1fr_1fr] lg:gap-16 lg:px-8">
-          <div>
-            <div className="text-xs font-bold tracking-wide text-cyan-400">How it works · scroll to follow one order</div>
-            <div className="relative mt-6 min-h-72">
-              {flowSteps.map((item, index) => (
-                <div
-                  key={item.title}
-                  aria-hidden={index !== step}
-                  className={`absolute inset-0 transition-all duration-500 motion-reduce:transition-none ${
-                    index === step ? "translate-y-0 opacity-100" : index < step ? "-translate-y-6 opacity-0" : "translate-y-6 opacity-0"
-                  }`}
-                >
-                  <div className="font-mono text-sm text-slate-500">Step {index + 1} of {flowSteps.length}</div>
-                  <h2 className="mt-3 text-3xl font-black leading-tight tracking-tight text-white sm:text-5xl">{item.title}</h2>
-                  <p className="mt-4 max-w-xl text-base leading-relaxed text-slate-400">{item.body}</p>
-                  {item.planned && <div className="mt-4"><Badge kind="planned" /></div>}
-                </div>
-              ))}
-            </div>
-            <div className="h-1 w-full max-w-xs overflow-hidden rounded bg-slate-800">
-              <div className="h-full bg-gradient-to-r from-cyan-500 to-blue-400" style={{ width: `${progress * 100}%` }} />
-            </div>
-            <div className="mt-2 text-[11px] text-slate-600">Illustrative walkthrough · not live data</div>
-          </div>
-
-          <ol className="relative space-y-2.5">
-            <div className="absolute bottom-7 left-[27px] top-7 w-px bg-slate-800">
-              <div className="w-full bg-gradient-to-b from-cyan-500 to-blue-400" style={{ height: `${progress * 100}%` }} />
-            </div>
-            {stages.map((stage, index) => {
-              const lit = index <= lastLit;
-              const current = index === (flowSteps[step].planned ? 5 : step);
-              return (
-                <li
-                  key={stage.label}
-                  className={`relative flex items-center gap-4 rounded-xl border px-3 py-2.5 transition-all duration-500 motion-reduce:transition-none ${
-                    stage.planned ? "border-dashed" : ""
-                  } ${
-                    current
-                      ? "scale-[1.02] border-cyan-400/60 bg-cyan-400/10 shadow-lg shadow-cyan-500/10"
-                      : lit
-                        ? "border-slate-700 bg-slate-900/70"
-                        : "border-slate-800/70 bg-transparent opacity-50"
-                  }`}
-                >
-                  <div className={`grid size-8 shrink-0 place-items-center rounded-lg ${current ? "bg-cyan-400 text-slate-950" : lit ? "bg-slate-800 text-cyan-400" : "bg-slate-900 text-slate-600"}`}>
-                    <Icon name={stage.icon} />
-                  </div>
-                  <div>
-                    <div className="text-xs font-black tracking-wide text-slate-200">{stage.label}</div>
-                    <div className={`font-mono text-[11px] ${stage.planned ? "text-blue-400/80" : "text-slate-500"}`}>{stage.meta}</div>
-                  </div>
-                </li>
-              );
-            })}
-          </ol>
-        </div>
-      </div>
-    </section>
-  );
-}
-
 
 function App() {
   // ---- engine link (WebSocket bridge) ----------------------------------
@@ -701,6 +598,13 @@ function App() {
             ))}
           </nav>
 
+          <Link
+            to={researchPath.home}
+            className="rounded-md border border-cyan-500/40 bg-cyan-500/10 px-3 py-1.5 text-xs font-bold text-cyan-300 transition hover:border-cyan-400 hover:text-white"
+          >
+            how&apos;z that! <span aria-hidden="true">→</span>
+          </Link>
+
           <div className="ml-auto flex flex-wrap items-center gap-2">
             <div title={linkLabel} className={`flex max-w-64 items-center gap-2 rounded-lg border border-slate-800 bg-slate-900/70 px-3 py-2 text-xs font-semibold ${link === "live" ? "text-emerald-400" : link === "connecting" ? "text-amber-400" : "text-slate-400"}`}>
               <span className={`size-2 shrink-0 rounded-full ${link === "live" ? "bg-emerald-400" : link === "connecting" ? "animate-pulse bg-amber-400" : "bg-rose-400"}`} />
@@ -722,7 +626,7 @@ function App() {
       <div className="mx-auto max-w-[1500px] px-4 lg:px-8">
         <section id="overview" className="scroll-mt-24 pb-16 pt-10">
           <SectionHead
-            title="Overview"
+            title="welcome back!"
             text="A live look at the exchange engine. Start it to stream real orders, or use simulation mode while the bridge is offline."
             aside={
               <div className="flex flex-wrap items-center gap-2">
@@ -768,7 +672,7 @@ function App() {
             eyebrow="End-to-end event pipeline"
             icon="activity"
             className="col-span-12 xl:col-span-8"
-            action={<div className="flex items-center gap-2"><Badge kind="simulated" label="ILLUSTRATIVE ANIMATION" /><div className="flex items-center gap-2 rounded-md bg-slate-950 px-2.5 py-1.5 font-mono text-[11px] text-slate-500"><span className="size-1.5 rounded-full bg-cyan-400" /> TRACE MODE</div></div>}
+            action={<div className="flex items-center gap-2"><WhyChip slug="michael-scott-1996" /><div className="flex items-center gap-2"><Badge kind="simulated" label="ILLUSTRATIVE ANIMATION" /><div className="flex items-center gap-2 rounded-md bg-slate-950 px-2.5 py-1.5 font-mono text-[11px] text-slate-500"><span className="size-1.5 rounded-full bg-cyan-400" /> TRACE MODE</div></div></div>}
           >
             <div className="p-4">
               <div className="mb-4 flex items-center justify-between rounded-lg border border-cyan-500/20 bg-cyan-500/5 px-3 py-2.5">
@@ -872,7 +776,7 @@ function App() {
             eyebrow="Price-time priority · SYM-1 (synthetic)"
             icon="book"
             className="col-span-12 xl:col-span-7"
-            action={<Badge kind={hasLiveData ? "live" : "sample"} />}
+            action={<div className="flex items-center gap-2"><WhyChip slug="gould-2013-limit-order-books" /><Badge kind={hasLiveData ? "live" : "sample"} /></div>}
           >
             <div className="grid grid-cols-[1fr_auto_1fr]">
               <div className="px-4 py-3">
@@ -982,7 +886,7 @@ function App() {
             eyebrow="Queue → match, since engine start"
             icon="clock"
             className="col-span-12 xl:col-span-5"
-            action={<Badge kind={hasLiveData ? "live" : "sample"} label={hasLiveData ? "LIVE" : "NO DATA"} />}
+            action={<div className="flex items-center gap-2"><WhyChip slug="dean-barroso-2013-tail-at-scale" /><Badge kind={hasLiveData ? "live" : "sample"} label={hasLiveData ? "LIVE" : "NO DATA"} /></div>}
           >
             {hasLiveData && histTotal > 0 ? (
               <div className="p-4">
@@ -1209,14 +1113,12 @@ function App() {
             }
           />
           <div className="grid grid-cols-12 items-start gap-5">
-            <Panel title={`${selectedSymbol} Journey`} eyebrow="Real price history · rule-based story" icon="clock" className="col-span-12" action={<Badge kind="live" label="REAL DATA" />}>
+            <Panel title={`${selectedSymbol} Journey`} eyebrow="Real price history · rule-based story" icon="clock" className="col-span-12" action={<div className="flex items-center gap-2"><WhyChip slug="benartzi-thaler-1995-myopic-loss-aversion" /><Badge kind="live" label="REAL DATA" /></div>}>
               <Journey symbol={selectedSymbol} />
             </Panel>
           </div>
         </section>
       </div>
-
-      <PinnedFlow />
 
       <div className="mx-auto max-w-[1500px] px-4 pb-6 pt-10 lg:px-8">
         <div className="grid grid-cols-12 gap-5">
