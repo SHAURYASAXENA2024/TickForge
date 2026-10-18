@@ -66,7 +66,9 @@ body::before {
 }
 
 button:focus-visible,
-input:focus-visible {
+input:focus-visible,
+a:focus-visible,
+summary:focus-visible {
   outline: 2px solid var(--color-cyan-400);
   outline-offset: 2px;
 }
@@ -125,4 +127,21 @@ input:focus-visible {
   .reveal { opacity: 1; transform: none; transition: none; }
   .scroll-progress, .blob-a, .blob-b { animation: none !important; }
   html { scroll-behavior: auto; }
+}
+
+/* ---------- PDF export of the integrated paper ---------- */
+/* The paper is rendered into a .print-only node at the end of <body> only while printing;
+   the dashboard (#root) is hidden so the PDF contains just the paper, in black on white. */
+.print-only { display: none; }
+@media print {
+  @page { margin: 18mm; }
+  :root, body { background: #fff !important; color: #000; }
+  body::before { display: none !important; }
+  html.printing-paper #root { display: none !important; } /* only for "Export as PDF"; Ctrl+P prints normally */
+  .print-only { display: block; font: 11pt/1.5 Georgia, "Times New Roman", serif; }
+  .print-only * { color: #000 !important; background: transparent !important; border-color: #bbb !important; }
+  .print-only code { font-family: ui-monospace, monospace; font-size: 0.9em; }
+  .print-only a { text-decoration: none; }
+  .print-only table { border-collapse: collapse; }
+  .print-only section { break-inside: avoid-page; }
 }

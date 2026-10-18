@@ -98,19 +98,46 @@ export async function getStockSnapshot(symbol: string, signal?: AbortSignal): Pr
 // Journey (GET /api/stocks/{symbol}/journey?range=...)
 // ---------------------------------------------------------------------------------------------
 
-export type JourneyRange = "1d" | "5d" | "1mo" | "6mo" | "1y";
+export type JourneyRange = "1d" | "5d" | "1mo" | "6mo" | "1y" | "max";
 
 export type JourneyStamp = { time: string; label: string };
 export type JourneyPoint = JourneyStamp & { price: number };
 export type JourneySwing = { percent: number; start: JourneyPoint; end: JourneyPoint };
 export type JourneyEvent = {
-  kind: "open" | "rise" | "fall" | "high" | "low" | "volume" | "close";
+  kind: "open" | "rise" | "fall" | "high" | "low" | "volume" | "close" | "split";
   time: string;
   endTime?: string;
   label: string;
   text: string;
 };
 export type JourneyBar = PricePoint & { label: string };
+
+/** "Since listing" block, only present for range=max. */
+export type JourneyLongTerm = {
+  firstTraded: JourneyPoint;
+  yearsListed: number;
+  totalReturnPercent: number;
+  cagrPercent: number | null;
+  growthOf1000: number;
+  allTimeHigh: JourneyPoint;
+  allTimeLow: JourneyPoint;
+  fromAllTimeHighPercent: number;
+  years: { year: number; percent: number; partial: boolean }[];
+  bestYear: { year: number; percent: number; partial: boolean } | null;
+  worstYear: { year: number; percent: number; partial: boolean } | null;
+  drawdowns: {
+    percent: number;
+    start: JourneyPoint;
+    bottom: JourneyPoint;
+    recovered: boolean;
+    recoveredAt: JourneyStamp | null;
+    daysToBottom: number;
+    daysToRecover: number | null;
+  }[];
+  splits: (JourneyStamp & { barTime: string; ratio: number; text: string })[];
+  dividends: { count: number; totalPerShare: number; last: (JourneyStamp & { amount: number }) | null; byYear: { year: number; amount: number }[] };
+  notes: string[];
+};
 
 export type JourneyData = {
   symbol: string;
@@ -141,12 +168,13 @@ export type JourneyData = {
   yearLow: number | null;
   timeline: JourneyEvent[];
   history: JourneyBar[];
+  longTerm: JourneyLongTerm | null;
   storyMethod: string;
   dataNote: string;
   updatedAt: string;
 };
 
-const EVENT_KINDS = ["open", "rise", "fall", "high", "low", "volume", "close"];
+const EVENT_KINDS = ["open", "rise", "fall", "high", "low", "volume", "close", "split"];
 const bad = (what: string) => new StockApiError("contract", `Journey response is missing or invalid: ${what}`);
 
 function stamp(value: unknown, what: string): JourneyStamp {
@@ -163,6 +191,69 @@ function swing(value: unknown, what: string): JourneySwing {
 }
 const orNull = <T,>(value: unknown, parse: (v: unknown) => T): T | null => (value === null || value === undefined ? null : parse(value));
 const numOrNull = (value: unknown): number | null => (isNumber(value) ? value : null);
+const list = <T,>(value: unknown, what: string, parse: (v: unknown, what: string) => T): T[] => {
+  if (!Array.isArray(value)) throw bad(what);
+  return value.map((item, i) => parse(item, `${what}[${i}]`));
+};
+
+function yearReturn(value: unknown, what: string) {
+  if (!isObject(value) || !isNumber(value.year) || !isNumber(value.percent) || typeof value.partial !== "boolean") throw bad(what);
+  return { year: value.year, percent: value.percent, partial: value.partial };
+}
+
+export function parseLongTerm(value: unknown): JourneyLongTerm {
+  if (!isObject(value)) throw bad("longTerm");
+  for (const key of ["yearsListed", "totalReturnPercent", "growthOf1000", "fromAllTimeHighPercent"] as const) {
+    if (!isNumber(value[key])) throw bad(`longTerm.${key}`);
+  }
+  const div = value.dividends;
+  if (!isObject(div) || !isNumber(div.count) || !isNumber(div.totalPerShare)) throw bad("longTerm.dividends");
+  return {
+    firstTraded: point(value.firstTraded, "longTerm.firstTraded"),
+    yearsListed: value.yearsListed as number,
+    totalReturnPercent: value.totalReturnPercent as number,
+    cagrPercent: numOrNull(value.cagrPercent),
+    growthOf1000: value.growthOf1000 as number,
+    allTimeHigh: point(value.allTimeHigh, "longTerm.allTimeHigh"),
+    allTimeLow: point(value.allTimeLow, "longTerm.allTimeLow"),
+    fromAllTimeHighPercent: value.fromAllTimeHighPercent as number,
+    years: list(value.years, "longTerm.years", yearReturn),
+    bestYear: orNull(value.bestYear, (v) => yearReturn(v, "longTerm.bestYear")),
+    worstYear: orNull(value.worstYear, (v) => yearReturn(v, "longTerm.worstYear")),
+    drawdowns: list(value.drawdowns, "longTerm.drawdowns", (d, what) => {
+      if (!isObject(d) || !isNumber(d.percent) || !isNumber(d.daysToBottom)) throw bad(what);
+      return {
+        percent: d.percent,
+        start: point(d.start, `${what}.start`),
+        bottom: point(d.bottom, `${what}.bottom`),
+        recovered: d.recovered === true,
+        recoveredAt: orNull(d.recoveredAt, (s) => stamp(s, `${what}.recoveredAt`)),
+        daysToBottom: d.daysToBottom,
+        daysToRecover: numOrNull(d.daysToRecover),
+      };
+    }),
+    splits: list(value.splits, "longTerm.splits", (s, what) => {
+      if (!isObject(s) || !isString(s.barTime) || !isNumber(s.ratio) || !isString(s.text)) throw bad(what);
+      return { ...stamp(s, what), barTime: s.barTime, ratio: s.ratio, text: s.text };
+    }),
+    dividends: {
+      count: div.count,
+      totalPerShare: div.totalPerShare,
+      last: orNull(div.last, (l) => {
+        if (!isObject(l) || !isNumber(l.amount)) throw bad("longTerm.dividends.last");
+        return { ...stamp(l, "longTerm.dividends.last"), amount: l.amount };
+      }),
+      byYear: list(div.byYear, "longTerm.dividends.byYear", (y, what) => {
+        if (!isObject(y) || !isNumber(y.year) || !isNumber(y.amount)) throw bad(what);
+        return { year: y.year, amount: y.amount };
+      }),
+    },
+    notes: list(value.notes, "longTerm.notes", (n, what) => {
+      if (!isString(n)) throw bad(what);
+      return n;
+    }),
+  };
+}
 
 export function parseJourney(data: unknown, symbol: string, range: JourneyRange): JourneyData {
   if (!isObject(data)) throw bad("body");
@@ -258,6 +349,7 @@ export function parseJourney(data: unknown, symbol: string, range: JourneyRange)
     yearLow: numOrNull(data.yearLow),
     timeline,
     history,
+    longTerm: range === "max" ? parseLongTerm(data.longTerm) : null,
     storyMethod: data.storyMethod as string,
     dataNote: data.dataNote as string,
     updatedAt: data.updatedAt as string,
