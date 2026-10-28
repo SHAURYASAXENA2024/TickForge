@@ -1,3 +1,4 @@
+# tickforge-db
 # TickForge
 
 TickForge is an integrated systems project combining a lock-free concurrent order matching engine with a custom-built database storage engine into a single, low-latency trading exchange. Multiple threads submit buy/sell orders concurrently through a lock-free multi-producer single-consumer queue built on atomic compare-and-swap operations, eliminating the blocking and unpredictable latency caused by traditional mutex-based synchronization. A single matching engine thread processes these orders against a live limit order book using price-time priority. Every executed trade is durably persisted through a write-ahead log into a storage engine built from scratch using an LSM-tree architecture — the same design underlying production systems like RocksDB and Cassandra — supporting background compaction, time-range indexing, Bloom filters, and event-driven triggers for real-time alerts.
