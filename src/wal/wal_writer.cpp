@@ -1,5 +1,7 @@
 #include "wal/wal_writer.hpp"
 #include "wal/wal_record.hpp"
+#include "wal/wal_reader.hpp"
+#include "wal/db_state.hpp"
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>
@@ -59,38 +61,49 @@ bool WalWriter::commit(uint64_t txid, const std::vector<std::string> &records) {
   }
   return true;
 }
-// Add this to the very bottom of src/wal/wal_writer.cpp
+// ── Global WAL instance (used by Rust FFI) ───────────────────────────────
 
 static wal::WalWriter* global_wal_writer = nullptr;
+static std::string     global_wal_path;
 
 extern "C" {
-    // 1. Function to initialize the WAL writer with a file path from Rust
+    // 1. Initialize the WAL writer
     bool c_wal_init(const char* path, bool sync_on_commit) {
+        global_wal_path = std::string(path);
         if (global_wal_writer != nullptr) {
             delete global_wal_writer;
         }
-        global_wal_writer = new wal::WalWriter(std::string(path), sync_on_commit);
+        global_wal_writer = new wal::WalWriter(global_wal_path, sync_on_commit);
         return true;
     }
 
-    // 2. Function to append records for your virtual traders
+    // 2. Append a single trade record as one WAL transaction
     bool c_wal_commit_records(uint64_t txid, const char** records_array, size_t array_len) {
-        if (global_wal_writer == nullptr) {
-            return false;
-        }
-
-        // Convert the C-style array of raw strings into a C++ std::vector<std::string>
+        if (global_wal_writer == nullptr) return false;
         std::vector<std::string> cpp_records;
         cpp_records.reserve(array_len);
-        for (size_t i = 0; i < array_len; ++i) {
+        for (size_t i = 0; i < array_len; ++i)
             cpp_records.push_back(std::string(records_array[i]));
-        }
-
-        // Invoke your actual class method
         return global_wal_writer->commit(txid, cpp_records);
     }
 
-    // 3. Function to safely close the file descriptor when shutting down
+    // 3. Replay: scan committed transactions and invoke callback for each TRADE line.
+    //    callback(line_ptr, line_len) is called once per payload line inside a committed tx.
+    //    Returns the number of committed transactions replayed.
+    uint64_t c_wal_replay_records(const char* path,
+                                   void (*callback)(const char* line, size_t len)) {
+        wal::ReadResult res = wal::read_committed(std::string(path));
+        for (const wal::Transaction& tx : res.committed) {
+            for (const std::string& line : tx.records) {
+                if (callback) {
+                    callback(line.c_str(), line.size());
+                }
+            }
+        }
+        return static_cast<uint64_t>(res.committed.size());
+    }
+
+    // 4. Close the file descriptor when shutting down
     void c_wal_close() {
         if (global_wal_writer != nullptr) {
             delete global_wal_writer;
