@@ -161,12 +161,12 @@ Checked on this machine (WSL2, kernel 6.18) with `engine/tools/af_xdp_probe.c`, 
 
 ### P1: order tracking and counterparties
 
-- **Owner of an order lives in the engine and the WAL.** Self-trade prevention has to happen inside the atomic match, so the engine must know who owns an order. A new WAL frame type 3 is type 1 plus a ; orders without an owner are still written as type 1, so old logs replay unchanged.
-- **Self-trade prevention is on by default,  turns it off.** It only does anything for orders with a , so benchmarks and old clients are unaffected. Measured on the same machine: no regression (see docs/PROGRESS.md).
-- **Own orders are skipped, not cancelled or decremented.** The incoming order matches the next order in price-time order; if nothing else crosses, the remainder rests (a trader can then have a bid above their own ask). It is the least surprising option and keeps recovery a pure replay.
-- **The engine names both traders on every trade** (, ). The API no longer depends on an in-memory order-to-trader map, which was lost on restart.
-- **Orders table is its own CRC-protected log (), not an LSM table.** It is small, updated in place per order, and needs "last row wins", which the append-and-replay log gives with ~200 lines. It is rewritten when it holds 4 times more frames than live rows.
+- **The owner of an order lives in the engine and the WAL.** Self-trade prevention has to happen inside the atomic match, so the engine must know who owns an order. A new WAL frame type 3 is type 1 plus a `u32 trader_id`; orders without an owner are still written as type 1, so old logs replay unchanged.
+- **Self-trade prevention is on by default; `--no-stp` turns it off.** It only does anything for orders with a `trader_id`, so benchmarks and old clients are unaffected. Measured on the same machine: no regression (see docs/PROGRESS.md).
+- **Own orders are skipped, not cancelled or reduced.** The incoming order matches the next order in price-time order; if nothing else crosses, the remainder rests (a trader can then have a bid above their own ask). It is the least surprising option and keeps recovery a pure replay.
+- **The engine names both traders on every trade** (`buyer_id`, `seller_id`). The API no longer depends on an in-memory order-to-trader map, which was lost on restart.
+- **The orders table is its own CRC-protected log (`orders.log`), not an LSM table.** It is small, updated in place per order, and needs "last row wins", which append-and-replay gives in about 200 lines. It is rewritten when it holds 4 times more frames than live rows.
 - **Names on fills use a flag bit in the symbol length**, so records without names stay byte-identical and old SSTables still read.
 - **Rejected orders are stored under ids from 2^62 upward**, because the engine gives a rejected order no id. The reason is stored with the row.
-- **Trader 25 is Kapinza.**  0 on  means "the order ticket" and is stored as 25. The 24 virtual traders keep ids 1 to 24;  lists them under  and Kapinza under .
-- ** scans every table** (there is no index by trader). It serves a small panel; an index is not worth it until a panel needs it on a hot path.
+- **Trader 25 is Kapinza.** `trader_id` 0 on `POST /orders` means "the order ticket" and is stored as 25. The 24 virtual traders keep ids 1 to 24; `/traders` lists them under `traders` and Kapinza under `manual`.
+- **`trades_by_trader` scans every table** (there is no index by trader). It serves a small panel; an index is not worth it until something needs it on a hot path.
