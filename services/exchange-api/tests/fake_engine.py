@@ -24,6 +24,8 @@ class FakeEngine:
         # qty * limit in cash, a sell locks shares, fills settle at the trade price.
         self.start_cash, self.start_shares, self.start_symbols = 100_000_000, 500, 10
         self.accounts: dict[int, dict] = {}
+        self.reference: dict[int, int] = {}  # symbol_id -> reference price (cents)
+        self.reference_calls: list[tuple[int, int, int]] = []  # (symbol_id, price, clear_pct), for tests
 
     # ---- thread control -----------------------------------------------------------------------
     def start(self) -> None:
@@ -80,8 +82,24 @@ class FakeEngine:
         self.seq += 1
         self._send(writer, {"type": "ack", "client_ref": msg["client_ref"], "order_id": 0, "seq": self.seq})
 
+    def _set_reference(self, msg: dict, writer: asyncio.StreamWriter) -> None:
+        sid, price, pct = msg["symbol_id"], msg["price"], msg.get("clear_pct", 0)
+        self.reference[sid] = price
+        self.reference_calls.append((sid, price, pct))
+        book = self.books.get(sid, {})
+        if pct:
+            for side in book.values():
+                for order in list(side):
+                    if abs(order["price"] - price) * 100 > price * pct:
+                        side.remove(order)
+                        self._lock(order, sid, -1)
+        self.seq += 1
+        self._send(writer, {"type": "ack", "client_ref": msg["client_ref"], "order_id": 0, "seq": self.seq})
+
     def _handle(self, msg: dict, writer: asyncio.StreamWriter) -> None:
-        if msg["type"] == "reset_accounts":
+        if msg["type"] == "set_reference":
+            self._set_reference(msg, writer)
+        elif msg["type"] == "reset_accounts":
             self._reset_accounts(msg, writer)
         elif msg["type"] == "new_order":
             self._new_order(msg, writer)
@@ -89,7 +107,9 @@ class FakeEngine:
             self._cancel(msg, writer)
         elif msg["type"] == "command":
             name = msg["name"]
-            if name == "accounts":
+            if name == "reference":
+                self._send(writer, {"type": "reference", "prices": {str(s): p for s, p in self.reference.items()}})
+            elif name == "accounts":
                 self._send(writer, {"type": "accounts", "enabled": True, "accounts": [
                     {"trader_id": t, "cash": a["cash"], "reserved_cash": a["rc"],
                      "shares": {str(s): q for s, q in a["shares"].items() if q or a["rs"].get(s)},
@@ -147,6 +167,10 @@ class FakeEngine:
     def _new_order(self, msg: dict, writer: asyncio.StreamWriter) -> None:
         if msg["qty"] > 10_000:
             self._send(writer, {"type": "reject", "client_ref": msg["client_ref"], "reason": "max_qty"})
+            return
+        ref = self.reference.get(msg["symbol_id"])
+        if ref and abs(msg["price"] - ref) * 100 > ref * 20:  # the band is measured from the reference
+            self._send(writer, {"type": "reject", "client_ref": msg["client_ref"], "reason": "price_band"})
             return
         if (why := self._afford(msg)) is not None:
             self._send(writer, {"type": "reject", "client_ref": msg["client_ref"], "reason": why})

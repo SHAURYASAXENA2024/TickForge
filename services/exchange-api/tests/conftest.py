@@ -9,6 +9,9 @@ from app.main import create_app
 from tests.fake_engine import FakeEngine
 
 
+TEST_SNAPSHOT = str(__import__("pathlib").Path(__file__).with_name("reference_prices.json"))
+
+
 def free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -38,7 +41,7 @@ def engine():
 def client(engine):
     """The exchange-api talking to the fake engine, with virtual traders paused."""
     settings = Settings(engine_port=engine.port, memory_db=True, traders_start_running=False,
-                        tick_seconds=0.1, reconnect_seconds=0.1)
+                        tick_seconds=0.1, reconnect_seconds=0.1, reference_snapshot=TEST_SNAPSHOT)
     with TestClient(create_app(settings)) as c:
         wait_for(lambda: c.get("/health").json()["engine"] == "connected")
         yield c

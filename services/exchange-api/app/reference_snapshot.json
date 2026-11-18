@@ -1,0 +1,16 @@
+{
+  "source": "Yahoo Finance last daily close",
+  "as_of": "2026-11-18",
+  "prices_cents": {
+    "AAPL": 35220,
+    "TSLA": 38006,
+    "NVDA": 15282,
+    "MSFT": 50283,
+    "AMZN": 26263,
+    "GOOGL": 28145,
+    "META": 61179,
+    "JPM": 32602,
+    "BRK-B": 57778,
+    "AMD": 50694
+  }
+}

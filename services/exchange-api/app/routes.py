@@ -142,6 +142,14 @@ async def trader_fills(trader_id: int, request: Request, limit: int = 100):
     return {"trader_id": trader_id, "fills": fills}
 
 
+@router.get("/reference")
+async def get_reference(request: Request):
+    """The reference price of every symbol (cents) and where it came from: "yahoo" (read live from
+    market-data), "mixed", "snapshot" (saved prices, e.g. when offline) or "sample". Yahoo is
+    delayed by up to 15 minutes, and trades are simulated."""
+    return _exchange(request).reference_snapshot()
+
+
 @router.get("/symbols")
 async def get_symbols():
     return {"symbols": [{"symbol": s, "id": SYMBOL_IDS[s]} for s in ALL_SYMBOLS]}

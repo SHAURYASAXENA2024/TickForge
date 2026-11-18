@@ -18,6 +18,8 @@ from app.symbols import ALL_SYMBOLS
 START_CASH = 100_000_000  # $1,000,000.00
 START_SHARES = 500  # per symbol
 
+QUOTE_BAND_BP = 200  # virtual traders quote within 2 percent of the reference price
+
 STRATEGIES = ["aggressive", "passive", "random", "momentum", "contrarian", "scalper"]
 
 # The manual trader: orders placed from the order ticket belong to this account.
@@ -142,7 +144,8 @@ def make_order(trader: Trader, prices: dict[str, int], rng: random.Random):
     """Return (symbol, side, price_cents, qty) for this trader, or None if it cannot trade."""
     symbol = rng.choice(ALL_SYMBOLS)
     side, bp, qty_min, qty_max = _plan(trader.strategy, rng)
-    price = max(1, prices[symbol] * (10_000 + bp) // 10_000)
+    # Quote around the reference price, never further than 2 percent from it.
+    price = max(1, prices[symbol] * (10_000 + max(-QUOTE_BAND_BP, min(QUOTE_BAND_BP, bp))) // 10_000)
     qty = rng.randint(qty_min, qty_max)
 
     if side == "SELL" and trader.holdings.get(symbol, 0) == 0:

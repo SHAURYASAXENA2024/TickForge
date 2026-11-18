@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from app.config import Settings
 from app.main import create_app
 from app.traders import START_CASH, START_SHARES
-from tests.conftest import free_port, order, wait_for
+from tests.conftest import TEST_SNAPSHOT, free_port, order, wait_for
 
 ENGINE = os.environ.get("TICKFORGE_ENGINE_BIN", "")
 
@@ -41,7 +41,8 @@ def start_engine(port, wal):
 
 def make_client(port, data_dir):
     settings = Settings(engine_port=port, data_dir=str(data_dir), memory_db=False,
-                        traders_start_running=False, tick_seconds=0.1, reconnect_seconds=0.1)
+                        traders_start_running=False, tick_seconds=0.1, reconnect_seconds=0.1,
+                        reference_snapshot=TEST_SNAPSHOT)
     return TestClient(create_app(settings))
 
 

@@ -70,6 +70,15 @@ export type TraderFill = {
   sell_order_id: number;
 };
 
+/** Where the reference prices come from: read live from Yahoo (via market-data), saved, or sample. */
+export type ReferenceInfo = {
+  prices: Record<string, number>; // cents
+  source: "yahoo" | "mixed" | "snapshot" | "sample";
+  as_of: string; // a date for a snapshot, a time for a live read
+  updated_ms: number;
+  live: string[];
+};
+
 export type OrderBook = { symbol: string; bids: [number, number][]; asks: [number, number][] };
 
 export type ExchangeHealth = { status: string; engine: "connected" | "disconnected"; trades: number };
@@ -103,6 +112,7 @@ export async function cancelOrder(orderId: number): Promise<void> {
   if (res.status === 409) throw new OrderRejected(((await res.json()) as { detail?: { reason?: string } }).detail?.reason ?? "rejected");
   if (!res.ok) throw new Error(`exchange-api ${res.status}`);
 }
+export const getReference = () => exchangeFetch<ReferenceInfo>("/reference");
 export const getOrderBook = (symbol: string) => exchangeFetch<OrderBook>(`/orderbook?symbol=${encodeURIComponent(symbol)}`);
 
 /** Send a manual order as Kapinza. Throws OrderRejected with the engine's reason, or Error if the API is down. */
@@ -123,7 +133,7 @@ export async function postOrder(order: { symbol: string; side: TradeSide; price:
 /** Plain-English text for the engine's reject reasons. */
 export const REJECT_TEXT: Record<string, string> = {
   max_qty: "The quantity is above the engine limit.",
-  price_band: "The price is too far from the last trade price.",
+  price_band: "The price is more than 20% away from the reference price.",
   unknown_symbol: "The engine does not know this symbol.",
   bad_request: "The engine could not read the order.",
   unknown_order: "That order is not on the book.",
@@ -179,6 +189,31 @@ export function watchTraders(onUpdate: (traders: Trader[]) => void): () => void 
     const d = data as { traders?: Trader[] };
     if (Array.isArray(d.traders)) onUpdate(d.traders);
   });
+}
+
+/** The reference prices, read again every 10 seconds. `null` until the first answer. */
+export function useReference(): ReferenceInfo | null {
+  const [info, setInfo] = useState<ReferenceInfo | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const load = () => getReference().then((r) => alive && setInfo(r)).catch(() => undefined);
+    load();
+    const timer = window.setInterval(load, 10_000);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
+  }, []);
+  return info;
+}
+
+/** The one line that says what the prices in the order book are. */
+export function referenceLabel(info: ReferenceInfo | null): string {
+  if (!info) return "Reference price: not available (exchange-api is not reachable). Trades: simulated.";
+  if (info.source === "yahoo") return "Reference price: Yahoo (delayed up to 15 min). Trades: simulated.";
+  if (info.source === "mixed") return `Reference price: Yahoo (delayed up to 15 min) for ${info.live.join(", ")}; the other symbols use a saved snapshot. Trades: simulated.`;
+  if (info.source === "snapshot") return `Reference price: saved snapshot from ${info.as_of || "an earlier day"}, because Yahoo could not be read. Trades: simulated.`;
+  return "Reference price: sample numbers, no real price was available. Trades: simulated.";
 }
 
 /** Live order book for one symbol from /ws/orderbook. `null` until the first snapshot arrives. */

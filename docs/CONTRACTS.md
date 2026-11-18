@@ -31,6 +31,8 @@ Server: `engine_server --port 9100 --wal <file>` listens on `127.0.0.1`. Each me
 {"type":"command","name":"stats"}
 {"type":"command","name":"state_hash"}
 {"type":"command","name":"accounts"}
+{"type":"command","name":"reference"}
+{"type":"set_reference","client_ref":20,"symbol_id":1,"price":35220,"clear_pct":5}
 {"type":"reset_accounts","client_ref":19,"from":1,"to":24}
 ```
 
@@ -80,6 +82,16 @@ Server: `engine_server --port 9100 --wal <file>` listens on `127.0.0.1`. Each me
 
 - `--max-qty 10000`: reject larger orders.
 - `--band-pct 20`: once a symbol has traded, reject prices more than 20% away from the last trade price. Before the first trade there is no band.
+
+### Reference prices
+
+`set_reference` gives a symbol a reference price in cents. It is logged (WAL type 5, same layout as a new order: `symbol_id`, `price`, and `qty` = `clear_pct`) and acked with `order_id` 0.
+
+- The 20% price band is measured from the reference price when the symbol has one, otherwise from the last trade as before.
+- Resting orders whose price is more than `clear_pct` percent away from the new reference are cancelled in the same step (0 clears nothing; reservations of those orders are released). Replay does the same, so the book after a restart is the book before the crash.
+- `command reference` replies `{"type":"reference","prices":{"1":35220,...}}`.
+- Reference prices are part of `state_hash` only for symbols that have one, so an engine that never gets one hashes as before.
+- exchange-api sends them (see `docs/DECISIONS.md`, P3). `GET /reference` on exchange-api returns `{prices, source, as_of, updated_ms, live, seeded}` where `source` is `yahoo`, `mixed`, `snapshot` or `sample`.
 
 ### Accounts and reservations
 
@@ -155,6 +167,7 @@ frame  = len:u32  crc:u32  payload[len]
 |---|---|
 | new order (`type=1`) | `u8 type, u64 seq, u64 ts_ms, u64 order_id, u32 symbol_id, u8 side (0=BUY,1=SELL), i64 price_cents, u32 qty` |
 | new order with an owner (`type=3`) | the `type=1` layout, then `u32 trader_id` at the end |
+| reference price (`type=5`) | same as a new order (`type=1`): `symbol_id`, `price` (cents), `qty` = clear percent; side is 0 |
 | reset accounts (`type=4`) | `u8 type, u64 seq, u64 ts_ms, u64 first trader id, u32 last trader id` |
 | cancel (`type=2`) | `u8 type, u64 seq, u64 ts_ms, u64 order_id` |
 
