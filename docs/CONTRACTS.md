@@ -25,14 +25,14 @@ Server: `engine_server --port 9100 --wal <file>` listens on `127.0.0.1`. Each me
 ### In (client to engine)
 
 ```json
-{"type":"new_order","client_ref":17,"symbol_id":3,"side":"BUY","price":18950,"qty":100}
+{"type":"new_order","client_ref":17,"symbol_id":3,"side":"BUY","price":18950,"qty":100,"trader_id":25}
 {"type":"cancel","client_ref":18,"order_id":4021}
 {"type":"command","name":"book","symbol_id":3,"depth":10}
 {"type":"command","name":"stats"}
 {"type":"command","name":"state_hash"}
 ```
 
-`client_ref` is any integer the client chooses. The engine echoes it in the `ack` or `reject` so the client can match replies to requests.
+`trader_id` is optional (default 0 = no owner). It is the owner of the order: it is written to the WAL with the order, it comes back as `buyer_id` / `seller_id` on every trade, and the engine never matches an order against a resting order of the same owner (see Rules). `client_ref` is any integer the client chooses. The engine echoes it in the `ack` or `reject` so the client can match replies to requests.
 
 ### Out (engine to client)
 
@@ -49,7 +49,8 @@ Server: `engine_server --port 9100 --wal <file>` listens on `127.0.0.1`. Each me
 {"type":"ack","client_ref":17,"order_id":4021,"seq":4021}
 {"type":"reject","client_ref":17,"reason":"max_qty"}
 {"type":"trade","trade_id":903,"seq":4022,"symbol_id":3,"price":18950,"qty":60,
- "buy_order_id":4021,"sell_order_id":3990,"taker_side":"BUY","ts_ms":1767225600123}
+ "buy_order_id":4021,"sell_order_id":3990,"taker_side":"BUY","ts_ms":1767225600123,
+ "buyer_id":25,"seller_id":7}
 {"type":"book","symbol_id":3,"bids":[[18950,40],[18940,500]],"asks":[[18960,70]]}
 {"type":"state_hash","hash":"9f3a1c0b5d2e7a44","last_seq":4022}
 ```
@@ -77,6 +78,10 @@ Server: `engine_server --port 9100 --wal <file>` listens on `127.0.0.1`. Each me
 
 - `--max-qty 10000`: reject larger orders.
 - `--band-pct 20`: once a symbol has traded, reject prices more than 20% away from the last trade price. Before the first trade there is no band.
+
+### Self-trade prevention
+
+- On by default (see Rules). `--no-stp`: orders of the same trader may match each other.
 
 ### Thread placement
 
@@ -116,6 +121,7 @@ Off by default. A leader started with `--replicate` serves its WAL; a server sta
 ### Rules
 
 - Price-time priority. A trade prints at the **resting** order's price. Partial fills leave the remainder resting.
+- Self-trade prevention (on by default, `--no-stp` turns it off): an order with a `trader_id` is never matched against a resting order with the same `trader_id`. Those resting orders are skipped, and the next order in price-time order is used. If nothing else crosses, the remainder rests, so a trader's own bid can sit above their own ask. Orders with `trader_id` 0 are never affected. Recovery uses the same setting as the live run, so start the engine with the same flag when replaying a log.
 - One matching thread owns all books. Connection threads only parse, validate, write the WAL and push to the queue.
 - Order of events: validate, assign `seq`, append to WAL, `ack`, push to queue, match, broadcast `trade`.
 
@@ -134,7 +140,10 @@ frame  = len:u32  crc:u32  payload[len]
 | Payload | Layout |
 |---|---|
 | new order (`type=1`) | `u8 type, u64 seq, u64 ts_ms, u64 order_id, u32 symbol_id, u8 side (0=BUY,1=SELL), i64 price_cents, u32 qty` |
+| new order with an owner (`type=3`) | the `type=1` layout, then `u32 trader_id` at the end |
 | cancel (`type=2`) | `u8 type, u64 seq, u64 ts_ms, u64 order_id` |
+
+An order without an owner is still written as `type=1`, byte for byte as before, so older logs and logs of ownerless orders are unchanged and still replay.
 
 Recovery on start:
 
@@ -155,16 +164,27 @@ from tickforge_db import TickForgeDB
 db = TickForgeDB("/path/to/dir")          # creates or reopens the directory
 db.insert_trade(trade_id=903, symbol="AAPL", price_cents=18950, quantity=60,
                 buy_order_id=4021, sell_order_id=3990,
-                buyer_id=7, seller_id=12, timestamp_ms=1767225600123)  # -> None
+                buyer_id=7, seller_id=12, timestamp_ms=1767225600123,
+                buyer_name="", seller_name="")                         # -> None, names optional
 db.get_trade(903)                         # -> dict or None
 db.range(start_ms, end_ms, symbol=None)   # -> list[dict], start inclusive, end exclusive,
                                           #    sorted by (timestamp_ms, trade_id)
+db.trades_by_trader(trader_id, limit=200) # -> list[dict], newest first, buyer or seller
 db.count()                                # -> int, distinct trade_ids
+
+# orders table (file orders.log in the database directory; the last row for an order id wins)
+db.upsert_order(order_id, trader_id, trader_name, side, symbol, quantity, price_cents,
+                status, filled, created_ms, updated_ms, reason="")      # side BUY|SELL
+db.get_order(order_id)                    # -> dict or None
+db.list_orders(trader_id=None, limit=100) # -> list[dict], newest first
+db.order_count()                          # -> int
 db.flush()                                # memtable -> new SSTable
 db.compact()                              # merge SSTables (size-tiered); returns number merged
 ```
 
-A returned dict has exactly these keys: `trade_id, symbol, price_cents, quantity, buy_order_id, sell_order_id, buyer_id, seller_id, timestamp_ms`.
+A returned trade dict has exactly these keys: `trade_id, symbol, price_cents, quantity, buy_order_id, sell_order_id, buyer_id, seller_id, timestamp_ms, buyer_name, seller_name`. The two names are stored on the fill (at most 64 bytes each) in an optional section after the symbol, flagged by the top bit of the symbol length, so records and SSTables written without names are unchanged.
+
+An order dict has `order_id, trader_id, trader_name, side, symbol, quantity, price_cents, status, filled, created_ms, updated_ms, reason`. `status` is `open`, `partially_filled`, `filled`, `cancelled` or `rejected`. A rejected order never got an engine id, so exchange-api stores it under an id from the range starting at 2^62 and puts the engine's reason in `reason`. The orders log is a CRC-protected append-only file that is rewritten (to `.tmp`, then renamed) when it holds four times more frames than live orders.
 
 Rules:
 
@@ -187,15 +207,17 @@ REST (JSON, prices in cents):
 | Route | Purpose |
 |---|---|
 | `GET /health` | `{"status":"ok","engine":"connected"\|"disconnected","trades":N}` |
-| `POST /orders` | body `{trader_id, symbol, side, price, qty}` → `{order_id}` after the engine ack; 409 if rejected, with `reason` |
+| `POST /orders` | body `{trader_id, symbol, side, price, qty}` → `{order_id}` after the engine ack; 409 if rejected, with `reason`. `trader_id` is 1 to 24 (virtual traders), 25 or 0 (Kapinza, the order ticket's account) |
 | `DELETE /orders/{order_id}` | cancel |
 | `GET /orderbook?symbol=AAPL` | `{symbol, bids:[[price,qty]], asks:[[price,qty]]}` |
 | `GET /trades?limit=100` | newest first |
 | `GET /trades/history?start_ms=&end_ms=&symbol=` | from `tickforge_db.range` |
-| `GET /traders`, `GET /traders/{id}` | cash (cents), holdings, realized P&L (cents), trade count |
+| `GET /traders`, `GET /traders/{id}` | cash (cents), holdings, realized P&L (cents), trade count. `/traders` has the 24 virtual traders under `traders` and Kapinza under `manual`; `/traders/25` is Kapinza |
+| `GET /orders?trader_id=&limit=` | stored orders (status, filled quantity), newest first; `trader_id=0` means Kapinza |
+| `GET /traders/{id}/fills?limit=` | that trader's fills from the database, newest first, each with `order_id` (their own order), `side` (their side), and `counterparty_id` / `counterparty_name` (who was on the other side) |
 | `GET /symbols` | the symbol list with ids |
 
-A fill moves cash and shares between **the two traders who own the two orders**. The API keeps `order_id → trader_id` from the acks.
+A fill moves cash and shares between **the two traders who own the two orders**. The engine names both traders on every trade (`buyer_id`, `seller_id`), so this survives a restart of the API.
 
 WebSockets: `/ws/trades`, `/ws/orderbook`, `/ws/traders` push the same JSON as the matching REST route whenever it changes.
 

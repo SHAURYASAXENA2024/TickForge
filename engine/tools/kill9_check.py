@@ -79,7 +79,8 @@ def main():
             if accepted and rng.random() < 0.1:
                 message = {"type": "cancel", "client_ref": ref, "order_id": rng.choice(accepted[-200:])}
             else:
-                message = {"type": "new_order", "client_ref": ref, "symbol_id": rng.randint(1, 3),
+                message = {"type": "new_order", "client_ref": ref, "trader_id": rng.randint(0, 5),
+                           "symbol_id": rng.randint(1, 3),
                            "side": rng.choice(["BUY", "SELL"]), "price": rng.randint(9900, 10100),
                            "qty": rng.randint(1, 100)}
             client.sock.sendall((json.dumps(message) + "\n").encode())

@@ -12,6 +12,7 @@ mod database;
 mod error;
 mod log;
 mod memtable;
+mod orders;
 mod record;
 mod sstable;
 #[cfg(target_os = "linux")]
@@ -20,6 +21,7 @@ pub mod uring;
 pub use bloom::Bloom;
 pub use database::Database;
 pub use error::DbError;
+pub use orders::{OrderRow, OrderTable, STATUSES};
 pub use record::Trade;
 pub use sstable::{IoBackend, SsTable};
 

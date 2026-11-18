@@ -98,6 +98,7 @@ struct Options {
   std::string wal_path;
   int64_t max_qty = 10000;
   int64_t band_pct = 20;
+  bool stp = true;   // self-trade prevention (--no-stp turns it off)
   bool pin = false;  // pin the matching thread to one core (--pin turns it on)
   int pin_core = -1; // -1: choose automatically
   bool elastic_queue = false; // ElasticRing instead of MPSCQueue
@@ -143,7 +144,9 @@ static std::string trade_json(const Trade &t) {
          ",\"price\":" + std::to_string(t.price) + ",\"qty\":" + std::to_string(t.qty) +
          ",\"buy_order_id\":" + std::to_string(t.buy_order_id) +
          ",\"sell_order_id\":" + std::to_string(t.sell_order_id) + ",\"taker_side\":\"" +
-         side_name(t.taker_side) + "\",\"ts_ms\":" + std::to_string(t.ts_ms) + "}\n";
+         side_name(t.taker_side) + "\",\"ts_ms\":" + std::to_string(t.ts_ms) +
+         ",\"buyer_id\":" + std::to_string(t.buyer) + ",\"seller_id\":" + std::to_string(t.seller) +
+         "}\n";
 }
 
 // Process numbers from /proc/self (Linux).
@@ -185,6 +188,7 @@ class Server {
 public:
   explicit Server(const Options &opt, const tf_affinity::PinPlan &plan)
       : opt_(opt), plan_(plan), start_ns_(now_ns()), win_start_ns_(start_ns_) {
+    ex_.set_self_trade_prevention(opt_.stp);
     if (opt_.elastic_queue) ring_ = std::make_unique<ElasticRing<Job>>(opt_.ring_size);
     std::vector<Trade> ignored;
     WalRecord last;
@@ -353,8 +357,13 @@ private:
       send_line(c, reject_json(ref, "read_only"));
       return;
     }
-    int64_t symbol, price, qty;
+    int64_t symbol, price, qty, trader = 0;
     std::string side;
+    get_int(m, "trader_id", trader);
+    if (trader < 0 || trader > 1000000) {
+      send_line(c, reject_json(ref, "bad_request"));
+      return;
+    }
     if (!get_int(m, "symbol_id", symbol) || !get_int(m, "price", price) ||
         !get_int(m, "qty", qty) || !get_string(m, "side", side) ||
         (side != "BUY" && side != "SELL") || price <= 0 || qty <= 0) {
@@ -391,6 +400,7 @@ private:
     job.order.side = side == "BUY" ? Side::Buy : Side::Sell;
     job.order.price = price;
     job.order.qty = static_cast<uint32_t>(qty);
+    job.order.trader = static_cast<uint32_t>(trader);
 
     WalRecord rec;
     rec.type = WalRecord::NewOrder;
@@ -401,6 +411,7 @@ private:
     rec.side = static_cast<uint8_t>(job.order.side);
     rec.price = price;
     rec.qty = job.order.qty;
+    rec.trader = job.order.trader;
     write_wal(rec);
 
     send_line(c, ack_json(ref, job.order.order_id, job.order.seq));
@@ -932,6 +943,10 @@ static bool parse_args(int argc, char **argv, Options &opt) {
       opt.pin = a == "--pin";
       continue;
     }
+    if (a == "--no-stp") {
+      opt.stp = false;
+      continue;
+    }
     if (a == "--replicate") {
       opt.replicate = true;
       continue;
@@ -979,7 +994,7 @@ int main(int argc, char **argv) {
                  "usage: engine_server --wal <file> [--port 9100] [--max-qty 10000] "
                  "[--band-pct 20] [--pin | --no-pin] [--pin-core N] "
                  "[--queue lockfree|elastic] [--ring-size 65536] [--wal-io write|uring] "
-                 "[--replicate | --follow HOST:PORT]\n");
+                 "[--replicate | --follow HOST:PORT] [--no-stp]\n");
     return 2;
   }
   std::signal(SIGINT, on_signal);

@@ -199,7 +199,95 @@ void test_crc_and_json() {
   CHECK(!parse_json_object("{\"a\":1} extra", o));
 }
 
+// An order with an owner never trades with that owner's resting orders.
+static Order owned(uint64_t id, uint32_t trader, Side side, int64_t price, uint32_t qty) {
+  Order o;
+  o.order_id = o.seq = id;
+  o.symbol_id = 1;
+  o.trader = trader;
+  o.side = side;
+  o.price = price;
+  o.qty = qty;
+  return o;
+}
+
+void test_self_trade_prevention() {
+  {
+    // Same price level: the best opposite order is the trader's own, so the next one is used.
+    Exchange<MapBook> ex;
+    std::vector<Trade> t;
+    ex.new_order(owned(1, 7, Side::Sell, 10000, 10), t); // trader 7, first in line
+    ex.new_order(owned(2, 8, Side::Sell, 10000, 10), t); // trader 8, behind it
+    CHECK(t.empty());
+    ex.new_order(owned(3, 7, Side::Buy, 10000, 10), t);
+    CHECK(t.size() == 1);
+    CHECK(t[0].sell_order_id == 2 && t[0].buy_order_id == 3);
+    CHECK(t[0].buyer == 7 && t[0].seller == 8);
+    MapBook::Levels asks;
+    ex.book(1)->levels(Side::Sell, 10, asks);
+    CHECK(asks.size() == 1 && asks[0].second == 10); // trader 7's own sell is still resting
+  }
+  {
+    // Different price level: the own order at the best price is skipped, the next level is used.
+    Exchange<MapBook> ex;
+    std::vector<Trade> t;
+    ex.new_order(owned(1, 7, Side::Sell, 10000, 10), t);
+    ex.new_order(owned(2, 8, Side::Sell, 10100, 10), t);
+    ex.new_order(owned(3, 7, Side::Buy, 10100, 15), t);
+    CHECK(t.size() == 1 && t[0].sell_order_id == 2 && t[0].price == 10100 && t[0].qty == 10);
+    MapBook::Levels bids, asks;
+    ex.book(1)->levels(Side::Buy, 10, bids);
+    ex.book(1)->levels(Side::Sell, 10, asks);
+    CHECK(bids.size() == 1 && bids[0].first == 10100 && bids[0].second == 5); // remainder rests
+    CHECK(asks.size() == 1 && asks[0].first == 10000);                        // own ask untouched
+  }
+  {
+    // Only the trader's own orders on the other side: nothing trades, the order rests.
+    Exchange<MapBook> ex;
+    std::vector<Trade> t;
+    ex.new_order(owned(1, 7, Side::Sell, 10000, 10), t);
+    ex.new_order(owned(2, 7, Side::Buy, 10000, 10), t);
+    CHECK(t.empty());
+    CHECK(ex.trades_total() == 0);
+  }
+  {
+    // Orders without an owner (trader 0) still match each other, as before.
+    Exchange<MapBook> ex;
+    std::vector<Trade> t;
+    ex.new_order(owned(1, 0, Side::Sell, 10000, 10), t);
+    ex.new_order(owned(2, 0, Side::Buy, 10000, 10), t);
+    CHECK(t.size() == 1);
+  }
+  {
+    // With the flag off the same orders do trade.
+    Exchange<MapBook> ex;
+    ex.set_self_trade_prevention(false);
+    std::vector<Trade> t;
+    ex.new_order(owned(1, 7, Side::Sell, 10000, 10), t);
+    ex.new_order(owned(2, 7, Side::Buy, 10000, 10), t);
+    CHECK(t.size() == 1 && t[0].buyer == 7 && t[0].seller == 7);
+  }
+  {
+    // An owned order survives the WAL: type 3 frame, same fields back, and the old
+    // frame (no owner) is byte-identical to what it always was.
+    WalRecord r;
+    r.type = WalRecord::NewOrder;
+    r.seq = 5; r.ts_ms = 99; r.order_id = 5; r.symbol_id = 3; r.side = 1; r.price = 12345; r.qty = 77;
+    std::string plain = wal_encode_frame(r);
+    CHECK(plain.size() == 8 + 42);
+    r.trader = 25;
+    std::string frame = wal_encode_frame(r);
+    CHECK(frame.size() == 8 + 46);
+    WalRecord back;
+    size_t len = 0;
+    CHECK(wal_decode_frame(frame.data(), frame.size(), back, len) == WalFrame::Ok);
+    CHECK(len == frame.size() && back.trader == 25 && back.price == 12345 && back.qty == 77);
+    CHECK(wal_decode_frame(plain.data(), plain.size(), back, len) == WalFrame::Ok && back.trader == 0);
+  }
+}
+
 int main() {
+  test_self_trade_prevention();
   test_book<MapBook>();
   test_book<DenseBook>();
   test_books_agree();

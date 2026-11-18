@@ -59,22 +59,41 @@ public:
 private:
   using Queue = std::deque<Order>;
 
-  // Match `in` against one side of the book while the prices cross.
+  // Match `in` against one side of the book while the prices cross. An order with an
+  // owner never trades with that owner's own resting orders: they are skipped and the
+  // next order in price-time order is used instead.
   template <class Map, class Crosses>
   void take(Map &side, Order &in, uint64_t &next_trade_id, std::vector<Trade> &trades,
             Crosses crosses) {
-    while (in.qty > 0 && !side.empty()) {
-      auto level = side.begin();
+    const bool skip_own = in.stp && in.trader != 0;
+    for (auto level = side.begin(); in.qty > 0 && level != side.end();) {
       if (!crosses(level->first)) break;
       Queue &q = level->second;
-      while (in.qty > 0 && !q.empty()) {
-        trades.push_back(fill(next_trade_id++, in, q.front()));
-        if (q.front().qty == 0) {
-          where_.erase(q.front().order_id);
-          q.pop_front();
+      if (!skip_own) {
+        while (in.qty > 0 && !q.empty()) {
+          trades.push_back(fill(next_trade_id++, in, q.front()));
+          if (q.front().qty == 0) {
+            where_.erase(q.front().order_id);
+            q.pop_front();
+          }
+        }
+      } else {
+        for (auto it = q.begin(); it != q.end() && in.qty > 0;) {
+          if (it->trader == in.trader) {
+            ++it;
+            continue;
+          }
+          trades.push_back(fill(next_trade_id++, in, *it));
+          if (it->qty == 0) {
+            where_.erase(it->order_id);
+            it = q.erase(it);
+          } else {
+            ++it;
+          }
         }
       }
-      if (q.empty()) side.erase(level);
+      if (q.empty()) level = side.erase(level);
+      else ++level;
     }
   }
 

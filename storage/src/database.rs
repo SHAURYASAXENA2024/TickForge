@@ -1,6 +1,7 @@
 use crate::error::DbError;
 use crate::log::Log;
 use crate::memtable::MemTable;
+use crate::orders::{OrderRow, OrderTable};
 use crate::record::Trade;
 use crate::sstable::{IoBackend, SsTable};
 use std::collections::HashSet;
@@ -26,6 +27,8 @@ pub struct Database {
     distinct: u64,
     /// How flush and compaction write their files.
     io: IoBackend,
+    /// The orders table (file `orders.log`).
+    orders: OrderTable,
 }
 
 fn table_path(dir: &Path, number: u64) -> PathBuf {
@@ -79,8 +82,11 @@ impl Database {
             ids.extend(table.all()?.iter().map(|t| t.trade_id));
         }
 
+        let orders = OrderTable::open(&dir.join("orders.log"))?;
+
         Ok(Database {
             dir: dir.to_path_buf(),
+            orders,
             log,
             mem,
             next_number: numbers.last().map_or(1, |n| n + 1),
@@ -146,6 +152,24 @@ impl Database {
             }
         }
         out.sort_by_key(|t| (t.timestamp_ms, t.trade_id));
+        Ok(out)
+    }
+
+    /// The newest `limit` trades in which `trader_id` was the buyer or the seller, newest first.
+    /// This reads every table (there is no index by trader), so it is for small panels,
+    /// not for hot paths.
+    pub fn trades_of_trader(&self, trader_id: u64, limit: usize) -> Result<Vec<Trade>, DbError> {
+        let mine = |t: &Trade| t.buyer_id == trader_id || t.seller_id == trader_id;
+        let mut out: Vec<Trade> = self.mem.iter().filter(|t| mine(t)).cloned().collect();
+        for (i, (_, table)) in self.tables.iter().enumerate() {
+            for t in table.all()? {
+                if mine(&t) && !self.replaced_after(t.trade_id, i)? {
+                    out.push(t);
+                }
+            }
+        }
+        out.sort_by_key(|t| std::cmp::Reverse((t.timestamp_ms, t.trade_id)));
+        out.truncate(limit);
         Ok(out)
     }
 
@@ -235,6 +259,24 @@ impl Database {
         self.tables
             .splice(first..first + len, [(number, new_table)]);
         Ok(len)
+    }
+
+    /// Insert an order, or replace the order with the same id. Survives a crash once it returns.
+    pub fn upsert_order(&mut self, row: OrderRow) -> Result<(), DbError> {
+        self.orders.upsert(row)
+    }
+
+    pub fn get_order(&self, order_id: u64) -> Option<OrderRow> {
+        self.orders.get(order_id).cloned()
+    }
+
+    /// Newest first, at most `limit`, optionally one trader's.
+    pub fn list_orders(&self, trader_id: Option<u32>, limit: usize) -> Vec<OrderRow> {
+        self.orders.list(trader_id, limit)
+    }
+
+    pub fn order_count(&self) -> usize {
+        self.orders.len()
     }
 
     /// Number of SSTable files (for tests and monitoring).

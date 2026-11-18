@@ -21,6 +21,7 @@ struct WalRecord {
   uint8_t side = 0; // 0 = BUY, 1 = SELL
   int64_t price = 0;
   uint32_t qty = 0;
+  uint32_t trader = 0; // owner of a new order, 0 = none (a frame of type 3 when not 0)
 };
 
 uint32_t crc32(const uint8_t *data, size_t len);

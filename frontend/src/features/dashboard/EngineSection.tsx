@@ -5,6 +5,7 @@ import { DASH, dollars, fmtInt, fmtUs } from "@/lib/format";
 import { EXCHANGE_SYMBOLS, useOrderBook, type ExchangeHealth, type LiveTrade } from "@/lib/exchangeApi";
 import type { EngineStats } from "@/lib/telemetry";
 import { Badge, Notice, Panel, Stat } from "@/components/ui";
+import { MyOrders } from "./MyOrders";
 import { OrderTicket } from "./OrderTicket";
 
 type Props = {
@@ -180,6 +181,7 @@ export function EngineSection({ stats, linkLive, health, trades }: Props) {
         <OrderBookPanel symbol={symbol} onSymbol={setSymbol} trades={trades} linkLive={linkLive} />
         <OrderTicket symbol={symbol} onSymbol={setSymbol} online={health?.engine === "connected"} />
       </div>
+      <MyOrders online={health?.engine === "connected"} />
       <OrderPath stats={stats} health={health} />
       <LatencyPanel stats={stats} linkLive={linkLive} />
     </section>

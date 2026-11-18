@@ -87,13 +87,19 @@ class FakeEngine:
             return
         self.orders_seen += 1
         self.seq += 1
-        order = {"id": self.seq, "side": msg["side"], "price": msg["price"], "qty": msg["qty"]}
+        order = {"id": self.seq, "side": msg["side"], "price": msg["price"], "qty": msg["qty"],
+                 "trader": msg.get("trader_id", 0)}
         self._send(writer, {"type": "ack", "client_ref": msg["client_ref"], "order_id": order["id"], "seq": self.seq})
         book = self.books.setdefault(msg["symbol_id"], {"BUY": [], "SELL": []})
         opposite = book["SELL" if order["side"] == "BUY" else "BUY"]
-        while order["qty"] > 0 and opposite:
-            best = min(opposite, key=lambda o: (o["price"], o["id"])) if order["side"] == "BUY" else \
-                min(opposite, key=lambda o: (-o["price"], o["id"]))
+        # Like the real engine: an owned order never trades with its owner's resting orders.
+        def eligible():
+            return [o for o in opposite if not order["trader"] or o["trader"] != order["trader"]]
+
+        while order["qty"] > 0 and eligible():
+            candidates = eligible()
+            best = min(candidates, key=lambda o: (o["price"], o["id"])) if order["side"] == "BUY" else \
+                min(candidates, key=lambda o: (-o["price"], o["id"]))
             crosses = best["price"] <= order["price"] if order["side"] == "BUY" else best["price"] >= order["price"]
             if not crosses:
                 break
@@ -107,7 +113,8 @@ class FakeEngine:
             buy, sell = (order, best) if order["side"] == "BUY" else (best, order)
             trade = {"type": "trade", "trade_id": self.trade_id, "seq": self.seq, "symbol_id": msg["symbol_id"],
                      "price": best["price"], "qty": qty, "buy_order_id": buy["id"], "sell_order_id": sell["id"],
-                     "taker_side": order["side"], "ts_ms": 1_767_225_600_000 + self.trade_id}
+                     "taker_side": order["side"], "ts_ms": 1_767_225_600_000 + self.trade_id,
+                     "buyer_id": buy["trader"], "seller_id": sell["trader"]}
             for client in self.clients:
                 self._send(client, trade)
         if order["qty"] > 0:

@@ -67,7 +67,7 @@ static void send_orders(Client &c, int count, unsigned seed) {
       continue;
     }
     JsonObject r = c.request(order_json(ref, 1 + rng() % 3, rng() % 2 ? "BUY" : "SELL", 9900 + rng() % 200,
-                                        1 + rng() % 100),
+                                        1 + rng() % 100, static_cast<int>(rng() % 6)),
                              ref);
     int64_t id;
     if (get_int(r, "order_id", id)) ids.push_back(id);

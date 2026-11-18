@@ -89,8 +89,11 @@ struct Client {
   }
 };
 
-inline std::string order_json(int ref, int symbol, const char *side, int64_t price, int64_t qty) {
+// `trader` 0 sends no owner; anything else is the order's trader_id.
+inline std::string order_json(int ref, int symbol, const char *side, int64_t price, int64_t qty,
+                              int trader = 0) {
   return "{\"type\":\"new_order\",\"client_ref\":" + std::to_string(ref) +
+         (trader ? ",\"trader_id\":" + std::to_string(trader) : std::string()) +
          ",\"symbol_id\":" + std::to_string(symbol) + ",\"side\":\"" + side +
          "\",\"price\":" + std::to_string(price) + ",\"qty\":" + std::to_string(qty) + "}";
 }

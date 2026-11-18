@@ -13,10 +13,12 @@ struct Order {
   uint64_t order_id = 0; // equals seq
   uint64_t seq = 0;
   uint64_t ts_ms = 0;
-  uint32_t symbol_id = 0;
-  Side side = Side::Buy;
   int64_t price = 0;
-  uint32_t qty = 0; // remaining quantity once the order rests
+  uint32_t symbol_id = 0;
+  uint32_t trader = 0; // owner; 0 = unknown (no self-trade check, no account)
+  uint32_t qty = 0;    // remaining quantity once the order rests
+  Side side = Side::Buy;
+  bool stp = true;     // skip resting orders of the same trader (set by Exchange)
 };
 
 struct Trade {
@@ -29,6 +31,8 @@ struct Trade {
   uint64_t sell_order_id = 0;
   Side taker_side = Side::Buy;
   uint64_t ts_ms = 0;
+  uint32_t buyer = 0; // trader ids of the two orders (0 = unknown)
+  uint32_t seller = 0;
 };
 
 // Build a trade between an incoming order and a resting order.
@@ -44,6 +48,8 @@ inline Trade fill(uint64_t trade_id, Order &taker, Order &resting) {
   t.sell_order_id = taker.side == Side::Buy ? resting.order_id : taker.order_id;
   t.taker_side = taker.side;
   t.ts_ms = taker.ts_ms;
+  t.buyer = taker.side == Side::Buy ? taker.trader : resting.trader;
+  t.seller = taker.side == Side::Buy ? resting.trader : taker.trader;
   taker.qty -= t.qty;
   resting.qty -= t.qty;
   return t;

@@ -13,6 +13,7 @@ inline Order to_order(const WalRecord &r) {
   o.side = r.side == 0 ? Side::Buy : Side::Sell;
   o.price = r.price;
   o.qty = r.qty;
+  o.trader = r.trader;
   return o;
 }
 

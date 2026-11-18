@@ -36,14 +36,20 @@ class EngineClient:
         self.connected = False
         # Called (synchronously, in message order) for each `trade` message.
         self.on_trade: Callable[[dict], None] = lambda trade: None
+        # Called (synchronously, in message order) when the engine accepts a new order:
+        # on_order(order_id, trader_id, symbol_id, side, price, qty). It runs before any trade
+        # of that order is reported, so a listener always sees the order first.
+        self.on_order: Callable[..., None] = lambda *args: None
+        # on_reject(trader_id, symbol_id, side, price, qty, reason) when the engine refuses an order.
+        self.on_reject: Callable[..., None] = lambda *args: None
         # order_id -> [trader_id, remaining quantity]. An entry is dropped when the order is
         # fully filled or cancelled.
         self.owners: dict[int, list[int]] = {}
         self._writer: asyncio.StreamWriter | None = None
         self._task: asyncio.Task | None = None
         self._next_ref = 0
-        # client_ref -> (future, trader_id, qty) for orders waiting for ack/reject
-        self._waiting: dict[int, tuple[asyncio.Future, int, int]] = {}
+        # client_ref -> (future, trader_id, qty, order) for requests waiting for ack/reject
+        self._waiting: dict[int, tuple[asyncio.Future, int, int, tuple | None]] = {}
         # reply key ("book", symbol_id) / ("stats",) / ... -> future
         self._replies: dict[tuple, asyncio.Future] = {}
 
@@ -81,7 +87,7 @@ class EngineClient:
         if self._writer:
             self._writer.close()
             self._writer = None
-        for future, _, _ in self._waiting.values():
+        for future, _, _, _ in self._waiting.values():
             if not future.done():
                 future.set_exception(EngineDown("connection lost"))
         for future in self._replies.values():
@@ -109,6 +115,8 @@ class EngineClient:
             self._on_ack(msg)
         elif kind == "reject":
             waiting = self._waiting.pop(msg.get("client_ref"), None)
+            if waiting and waiting[3] is not None:
+                self.on_reject(waiting[1], *waiting[3], str(msg.get("reason", "bad_request")))
             if waiting and not waiting[0].done():
                 waiting[0].set_exception(Rejected(str(msg.get("reason", "bad_request"))))
         elif kind == "trade":
@@ -122,10 +130,12 @@ class EngineClient:
         waiting = self._waiting.pop(msg.get("client_ref"), None)
         if waiting is None:
             return
-        future, trader_id, qty = waiting
+        future, trader_id, qty, order = waiting
         order_id = msg["order_id"]
         if qty > 0:  # a new order (a cancel ack has qty 0)
             self.owners[order_id] = [trader_id, qty]
+            if order is not None:
+                self.on_order(order_id, trader_id, *order)
         else:
             self.owners.pop(order_id, None)
         if not future.done():
@@ -140,8 +150,13 @@ class EngineClient:
                 owner[1] -= msg["qty"]
                 if owner[1] <= 0:
                     del self.owners[order_id]
-        msg["buyer_id"] = buyer[0] if buyer else 0
-        msg["seller_id"] = seller[0] if seller else 0
+        # The engine names both traders itself (it logs them with the order, so they survive a
+        # restart of this process). The owners table is only a fallback for an engine that
+        # does not.
+        if "buyer_id" not in msg:
+            msg["buyer_id"] = buyer[0] if buyer else 0
+        if "seller_id" not in msg:
+            msg["seller_id"] = seller[0] if seller else 0
         self.on_trade(msg)
 
     def _resolve(self, key: tuple, msg: dict) -> None:
@@ -155,12 +170,12 @@ class EngineClient:
             raise EngineDown("engine not connected")
         self._writer.write((json.dumps(message) + "\n").encode())
 
-    async def _call(self, message: dict, trader_id: int = 0, qty: int = 0) -> int:
+    async def _call(self, message: dict, trader_id: int = 0, qty: int = 0, order: tuple | None = None) -> int:
         """Send an order or cancel and wait for its ack (returns the order id) or reject."""
         self._next_ref += 1
         ref = self._next_ref
         future = asyncio.get_running_loop().create_future()
-        self._waiting[ref] = (future, trader_id, qty)
+        self._waiting[ref] = (future, trader_id, qty, order)
         try:
             self._send({**message, "client_ref": ref})
             return await asyncio.wait_for(future, REQUEST_TIMEOUT)
@@ -169,8 +184,9 @@ class EngineClient:
 
     async def new_order(self, trader_id: int, symbol_id: int, side: str, price: int, qty: int) -> int:
         return await self._call(
-            {"type": "new_order", "symbol_id": symbol_id, "side": side, "price": price, "qty": qty},
-            trader_id, qty,
+            {"type": "new_order", "trader_id": trader_id, "symbol_id": symbol_id, "side": side,
+             "price": price, "qty": qty},
+            trader_id, qty, (symbol_id, side, price, qty),
         )
 
     async def cancel(self, order_id: int) -> int:

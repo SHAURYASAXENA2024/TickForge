@@ -98,7 +98,9 @@ int main(int argc, char **argv) {
   for (int i = 0; i < 300; i++) {
     int ref = 100 + i;
     JsonObject x = a.request(
-        order_json(ref, 1 + rng() % 3, rng() % 2 ? "BUY" : "SELL", 9800 + rng() % 400, 1 + rng() % 100), ref);
+        order_json(ref, 1 + rng() % 3, rng() % 2 ? "BUY" : "SELL", 9800 + rng() % 400, 1 + rng() % 100,
+                   static_cast<int>(rng() % 6)),  // traders 1..5 and some without an owner: self-trade skips happen
+        ref);
     (void)x;
   }
 

@@ -21,11 +21,14 @@ from app.config import Settings
 from app.db import open_db
 from app.engine_client import EngineClient, EngineDown, Rejected
 from app.symbols import ALL_SYMBOLS, DEFAULT_SYMBOL, START_PRICES, SYMBOL_BY_ID, SYMBOL_IDS
-from app.traders import make_order, make_traders
+from app.traders import MANUAL_ID, make_manual_trader, make_order, make_traders, trader_name
 
 log = logging.getLogger("exchange-api")
 
 SPEEDS = (1, 10, 100)
+# Orders the engine refused have no engine id. They get ids from this range so that they can
+# still be stored (status "rejected") without ever clashing with a real order id.
+REJECTED_ID_BASE = 1 << 62
 STATS_NUMBERS = ["uptime_s", "submitted", "processed", "queue_depth", "orders_per_sec", "trades_total",
                  "trades_per_sec", "avg_latency_us", "p50_latency_us", "p99_latency_us", "cpu_pct",
                  "rss_mb", "threads"]
@@ -39,8 +42,12 @@ class Exchange:
         self.settings = settings
         self.prices: dict[str, int] = dict(START_PRICES)  # last trade price per symbol, cents
         self.traders = make_traders(self.prices)
+        self.manual = make_manual_trader(self.prices)  # Kapinza: the order ticket's account
+        self._reject_seq = REJECTED_ID_BASE
         self.engine = EngineClient(settings.engine_host, settings.engine_port, settings.reconnect_seconds)
         self.engine.on_trade = self._on_trade
+        self.engine.on_order = self._on_order_accepted
+        self.engine.on_reject = self._on_order_rejected
         self.store = None
         self.recent_trades: deque[dict] = deque(maxlen=500)  # newest first
         self.books: dict[str, dict] = {s: {"symbol": s, "bids": [], "asks": []} for s in ALL_SYMBOLS}
@@ -63,6 +70,9 @@ class Exchange:
     # ---- start / stop -------------------------------------------------------------------------
     async def start(self) -> None:
         self.store = open_db(self.settings)  # raises if tickforge_db is missing
+        newest = self.store.list_orders(None, 1)  # rejected ids are the highest, so the newest is the max
+        if newest and newest[0]["order_id"] >= REJECTED_ID_BASE:
+            self._reject_seq = newest[0]["order_id"]
         self._persist_queue = asyncio.Queue()
         self.engine.start()
         self._tasks = [asyncio.create_task(self._persist_loop()),
@@ -90,8 +100,9 @@ class Exchange:
         price, qty = msg["price"], msg["qty"]
         self.prices[symbol] = price
         for trader_id, side in ((msg["buyer_id"], "BUY"), (msg["seller_id"], "SELL")):
-            if 1 <= trader_id <= len(self.traders):  # id 0 = a manual order, it has no account
-                self.traders[trader_id - 1].apply_fill(symbol, side, price, qty)
+            account = self.account(trader_id)
+            if account is not None:  # id 0 = an order whose owner is unknown
+                account.apply_fill(symbol, side, price, qty)
         trade = {
             "trade_id": msg["trade_id"], "symbol": symbol, "price": price, "qty": qty,
             "buy_order_id": msg["buy_order_id"], "sell_order_id": msg["sell_order_id"],
@@ -101,28 +112,84 @@ class Exchange:
         self.recent_trades.appendleft(trade)
         self._telemetry_trades.append(
             {"id": trade["trade_id"], "price": price, "qty": qty, "buy": trade["buyer_id"], "sell": trade["seller_id"]})
-        self._persist_queue.put_nowait(trade)
+        self._persist_queue.put_nowait(("trade", trade))
+
+    def account(self, trader_id: int):
+        """The Trader object for an id: 1..24 are virtual traders, 25 is Kapinza, 0 has none."""
+        if 1 <= trader_id <= len(self.traders):
+            return self.traders[trader_id - 1]
+        return self.manual if trader_id == MANUAL_ID else None
+
+    # ---- orders: everything the database keeps about them ---------------------------------------
+    def _order_row(self, order_id: int, trader_id: int, symbol_id: int, side: str, price: int, qty: int,
+                   status: str = "open", filled: int = 0, reason: str = "") -> dict:
+        now = int(time.time() * 1000)
+        return {"order_id": order_id, "trader_id": trader_id, "trader_name": trader_name(trader_id),
+                "side": side, "symbol": SYMBOL_BY_ID[symbol_id], "quantity": qty, "price_cents": price,
+                "status": status, "filled": filled, "created_ms": now, "updated_ms": now, "reason": reason}
+
+    def _on_order_accepted(self, order_id: int, trader_id: int, symbol_id: int, side: str, price: int, qty: int) -> None:
+        self._persist_queue.put_nowait(("order", self._order_row(order_id, trader_id, symbol_id, side, price, qty)))
+
+    def _on_order_rejected(self, trader_id: int, symbol_id: int, side: str, price: int, qty: int, reason: str) -> None:
+        self._reject_seq += 1
+        row = self._order_row(self._reject_seq, trader_id, symbol_id, side, price, qty, "rejected", 0, reason)
+        self._persist_queue.put_nowait(("order", row))
 
     def _insert_trade(self, trade: dict) -> None:
         self.store.insert_trade(
             trade_id=trade["trade_id"], symbol=trade["symbol"], price_cents=trade["price"],
             quantity=trade["qty"], buy_order_id=trade["buy_order_id"], sell_order_id=trade["sell_order_id"],
-            buyer_id=trade["buyer_id"], seller_id=trade["seller_id"], timestamp_ms=trade["ts_ms"])
+            buyer_id=trade["buyer_id"], seller_id=trade["seller_id"], timestamp_ms=trade["ts_ms"],
+            buyer_name=trader_name(trade["buyer_id"]), seller_name=trader_name(trade["seller_id"]))
+        for order_id in (trade["buy_order_id"], trade["sell_order_id"]):  # both orders get the fill
+            self._add_fill_to_order(order_id, trade["qty"])
+
+    def _add_fill_to_order(self, order_id: int, qty: int) -> None:
+        row = self.store.get_order(order_id)
+        if row is None:
+            return  # an order placed before orders were stored
+        row["filled"] = min(row["quantity"], row["filled"] + qty)
+        row["status"] = "filled" if row["filled"] >= row["quantity"] else "partially_filled"
+        row["updated_ms"] = int(time.time() * 1000)
+        self.store.upsert_order(**row)
+
+    def _mark_cancelled(self, order_id: int) -> None:
+        row = self.store.get_order(order_id)
+        if row is None or row["status"] in ("filled", "cancelled", "rejected"):
+            return
+        row["status"] = "cancelled"
+        row["updated_ms"] = int(time.time() * 1000)
+        self.store.upsert_order(**row)
+
+    async def cancel_order(self, order_id: int) -> int:
+        """Cancel one order in the engine and record it. Raises EngineDown or Rejected."""
+        result = await self.engine.cancel(order_id)
+        self._persist_queue.put_nowait(("cancel", order_id))
+        return result
 
     async def _persist_loop(self) -> None:
-        """Save each trade to the database, then push it to /ws/trades clients."""
+        """Save orders, fills and cancels to the database in the order they happened, then push
+        each trade to /ws/trades clients."""
         while True:
-            trade = await self._persist_queue.get()
+            kind, item = await self._persist_queue.get()
             try:
-                await self.db(self._insert_trade, trade)
+                if kind == "trade":
+                    await self.db(self._insert_trade, item)
+                elif kind == "order":
+                    await self.db(lambda row=item: self.store.upsert_order(**row))
+                elif kind == "cancel":
+                    await self.db(self._mark_cancelled, item)
             except Exception:
-                log.exception("could not save trade %s", trade["trade_id"])
-            await self._send(self.trade_clients, json.dumps(trade))
+                log.exception("could not save %s %s", kind, item)
+            if kind == "trade":
+                await self._send(self.trade_clients, json.dumps(item))
 
     # ---- orders -------------------------------------------------------------------------------
     async def place_order(self, trader_id: int, symbol: str, side: str, price: int, qty: int) -> int:
-        """Send one order to the engine. Raises EngineDown or Rejected."""
-        return await self.engine.new_order(trader_id, SYMBOL_IDS[symbol], side, price, qty)
+        """Send one order to the engine. Trader id 0 means a manual order: it belongs to Kapinza.
+        Raises EngineDown or Rejected."""
+        return await self.engine.new_order(trader_id or MANUAL_ID, SYMBOL_IDS[symbol], side, price, qty)
 
     async def _order_loop(self) -> None:
         """The virtual traders: one random trader sends one order each round."""
@@ -145,7 +212,7 @@ class Exchange:
         """Cancel the traders' open orders, then give every trader the starting cash and shares."""
         for order_id in list(self.engine.owners):
             try:
-                await self.engine.cancel(order_id)
+                await self.cancel_order(order_id)
             except (EngineDown, Rejected, asyncio.TimeoutError):
                 self.engine.owners.pop(order_id, None)
         for trader in self.traders:
@@ -163,7 +230,8 @@ class Exchange:
         return self.books[symbol]
 
     def traders_snapshot(self) -> dict:
-        return {"traders": [t.to_dict(self.prices) for t in self.traders]}
+        return {"traders": [t.to_dict(self.prices) for t in self.traders],
+                "manual": self.manual.to_dict(self.prices)}
 
     # ---- telemetry ----------------------------------------------------------------------------
     def status_message(self) -> dict:
@@ -206,7 +274,7 @@ class Exchange:
             self.notice = "order not sent: side, qty and price (in cents) are required"
             return
         try:
-            await self.place_order(0, DEFAULT_SYMBOL, side, price, qty)
+            await self.place_order(MANUAL_ID, DEFAULT_SYMBOL, side, price, qty)
         except Rejected as exc:
             self.notice = f"order rejected: {exc.reason}"
         except (EngineDown, asyncio.TimeoutError):

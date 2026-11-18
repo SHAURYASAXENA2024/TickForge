@@ -20,6 +20,10 @@ START_SHARES = 500  # per symbol
 
 STRATEGIES = ["aggressive", "passive", "random", "momentum", "contrarian", "scalper"]
 
+# The manual trader: orders placed from the order ticket belong to this account.
+MANUAL_ID = 25
+MANUAL_NAME = "Kapinza"
+
 NAMES = [
     "Arjun Mehta", "Priya Sharma", "Rahul Verma", "Sneha Gupta",
     "Vikram Singh", "Anil Kumar", "Deepa Nair", "Rohan Patel",
@@ -83,6 +87,19 @@ class Trader:
             "trades": self.trades,
             "last_action": self.last_action,
         }
+
+
+def make_manual_trader(prices: dict[str, int]) -> Trader:
+    trader = Trader(MANUAL_ID, MANUAL_NAME, "manual")
+    trader.reset(prices)
+    return trader
+
+
+def trader_name(trader_id: int) -> str:
+    """Display name of a trader id; empty for 0 (unknown)."""
+    if trader_id == MANUAL_ID:
+        return MANUAL_NAME
+    return NAMES[trader_id - 1] if 1 <= trader_id <= len(NAMES) else ""
 
 
 def make_traders(prices: dict[str, int]) -> list[Trader]:

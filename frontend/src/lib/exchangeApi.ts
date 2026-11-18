@@ -30,6 +30,43 @@ export type Trader = {
   last_action: string;
 };
 
+/** The manual trader behind the order ticket. */
+export const MANUAL_TRADER_ID = 25;
+export const MANUAL_TRADER_NAME = "Kapinza";
+
+export type OrderStatus = "open" | "partially_filled" | "filled" | "cancelled" | "rejected";
+
+/** One row of the orders table, from the database. */
+export type StoredOrder = {
+  order_id: number;
+  trader_id: number;
+  trader_name: string;
+  side: TradeSide;
+  symbol: string;
+  quantity: number;
+  price_cents: number;
+  status: OrderStatus;
+  filled: number;
+  created_ms: number;
+  updated_ms: number;
+  reason: string;
+};
+
+/** One fill seen from a trader's side, with the name of whoever was on the other side. */
+export type TraderFill = {
+  trade_id: number;
+  symbol: string;
+  side: TradeSide;
+  price_cents: number;
+  quantity: number;
+  timestamp_ms: number;
+  order_id: number;
+  counterparty_id: number;
+  counterparty_name: string;
+  buy_order_id: number;
+  sell_order_id: number;
+};
+
 export type OrderBook = { symbol: string; bids: [number, number][]; asks: [number, number][] };
 
 export type ExchangeHealth = { status: string; engine: "connected" | "disconnected"; trades: number };
@@ -54,14 +91,23 @@ async function exchangeFetch<T>(path: string, init?: RequestInit): Promise<T> {
 export const getExchangeHealth = () => exchangeFetch<ExchangeHealth>("/health");
 export const getTraders = async () => (await exchangeFetch<{ traders: Trader[] }>("/traders")).traders;
 export const getRecentTrades = async (limit = 50) => (await exchangeFetch<{ trades: LiveTrade[] }>(`/trades?limit=${limit}`)).trades;
+export const getOrders = async (traderId: number, limit = 100) =>
+  (await exchangeFetch<{ orders: StoredOrder[] }>(`/orders?trader_id=${traderId}&limit=${limit}`)).orders;
+export const getFills = async (traderId: number, limit = 100) =>
+  (await exchangeFetch<{ fills: TraderFill[] }>(`/traders/${traderId}/fills?limit=${limit}`)).fills;
+export async function cancelOrder(orderId: number): Promise<void> {
+  const res = await fetch(`${EXCHANGE_URL}/orders/${orderId}`, { method: "DELETE" });
+  if (res.status === 409) throw new OrderRejected(((await res.json()) as { detail?: { reason?: string } }).detail?.reason ?? "rejected");
+  if (!res.ok) throw new Error(`exchange-api ${res.status}`);
+}
 export const getOrderBook = (symbol: string) => exchangeFetch<OrderBook>(`/orderbook?symbol=${encodeURIComponent(symbol)}`);
 
-/** Send a manual order (trader_id 0). Throws OrderRejected with the engine's reason, or Error if the API is down. */
+/** Send a manual order as Kapinza. Throws OrderRejected with the engine's reason, or Error if the API is down. */
 export async function postOrder(order: { symbol: string; side: TradeSide; price: number; qty: number }): Promise<number> {
   const res = await fetch(`${EXCHANGE_URL}/orders`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ trader_id: 0, ...order }),
+    body: JSON.stringify({ trader_id: MANUAL_TRADER_ID, ...order }),
   });
   if (res.status === 409) {
     const body = (await res.json()) as { detail?: { reason?: string } };
@@ -78,6 +124,8 @@ export const REJECT_TEXT: Record<string, string> = {
   unknown_symbol: "The engine does not know this symbol.",
   bad_request: "The engine could not read the order.",
   unknown_order: "That order is not on the book.",
+  insufficient_cash: "Not enough available cash for this order.",
+  insufficient_shares: "Not enough available shares for this order.",
 };
 
 /** Keep one WebSocket open (with retry) and hand every parsed JSON message to `onMessage`. Returns a close function. */

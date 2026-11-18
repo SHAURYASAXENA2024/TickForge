@@ -10,7 +10,7 @@
 #include <vector>
 
 static const char MAGIC[8] = {'T', 'F', 'W', 'A', 'L', '0', '0', '1'};
-static const size_t MAX_PAYLOAD = 64; // the largest real payload is 42 bytes
+static const size_t MAX_PAYLOAD = 64; // the largest real payload is 46 bytes
 
 uint32_t crc32(const uint8_t *data, size_t len) {
   // Built once; function-local statics are initialised thread-safely.
@@ -42,7 +42,10 @@ static uint64_t get(const uint8_t *p, int bytes) {
 
 std::string wal_encode_frame(const WalRecord &r) {
   std::string payload;
-  put(payload, r.type, 1);
+  // An order with an owner is written as type 3 (type 1 plus a trailing trader id), so
+  // logs of orders without owners stay byte-for-byte what they always were.
+  const bool owned = r.type == WalRecord::NewOrder && r.trader != 0;
+  put(payload, owned ? 3 : r.type, 1);
   put(payload, r.seq, 8);
   put(payload, r.ts_ms, 8);
   put(payload, r.order_id, 8);
@@ -51,6 +54,7 @@ std::string wal_encode_frame(const WalRecord &r) {
     put(payload, r.side, 1);
     put(payload, static_cast<uint64_t>(r.price), 8);
     put(payload, r.qty, 4);
+    if (owned) put(payload, r.trader, 4);
   }
   std::string frame;
   put(frame, payload.size(), 4);
@@ -61,12 +65,15 @@ std::string wal_encode_frame(const WalRecord &r) {
 // Returns false if the payload is not a valid record.
 static bool decode_payload(const uint8_t *p, size_t len, WalRecord &r) {
   if (len < 25) return false;
-  r.type = static_cast<WalRecord::Type>(p[0]);
+  const uint8_t kind = p[0];
+  r.type = kind == 3 ? WalRecord::NewOrder : static_cast<WalRecord::Type>(kind);
+  r.trader = 0;
   r.seq = get(p + 1, 8);
   r.ts_ms = get(p + 9, 8);
   r.order_id = get(p + 17, 8);
   if (r.type == WalRecord::Cancel) return len == 25;
-  if (r.type != WalRecord::NewOrder || len != 42) return false;
+  if (r.type != WalRecord::NewOrder || len != (kind == 3 ? 46u : 42u)) return false;
+  if (kind == 3) r.trader = static_cast<uint32_t>(get(p + 42, 4));
   r.symbol_id = static_cast<uint32_t>(get(p + 25, 4));
   r.side = p[29];
   r.price = static_cast<int64_t>(get(p + 30, 8));

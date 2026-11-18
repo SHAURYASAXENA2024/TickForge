@@ -42,6 +42,7 @@ impl Gen {
             buyer_id: self.next() % 24,
             seller_id: self.next() % 24,
             timestamp_ms: 1_767_225_600_000 + id,
+            ..Default::default()
         }
     }
 }
