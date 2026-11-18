@@ -20,6 +20,7 @@ Machine: 12th Gen Intel i5-12450H, 12 logical cores, 7.6 GiB, WSL2 Ubuntu (kerne
 
 | Task | Minutes | Status | Evidence |
 |---|---|---|---|
+| P1 order tracking, names on fills, Kapinza, self-trade prevention | about 150 | done | ctest 19 of 19 (self-trade cases in order_book_tests; owned orders in the crash, replication and sanitizer runs), cargo and binding tests for orders and names, exchange-api 20 passed 1 skipped, frontend 26 passed, kill -9 hash `0b8f83997668347d` identical, bench no regression (book 10.84 M ops/s, paced RTT P50 119 us, saturated 18833 orders/s vs baseline 7.65, 134, 14221) |
 
 ## Baseline benchmarks (unmodified engine, , full numbers in docs/BENCHMARKS.md)
 
