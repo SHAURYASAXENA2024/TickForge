@@ -18,6 +18,7 @@ fn trade(id: u64) -> Trade {
         buyer_id: id % 24,
         seller_id: (id + 1) % 24,
         timestamp_ms: 1_000 + id,
+        ..Default::default()
     }
 }
 

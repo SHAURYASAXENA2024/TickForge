@@ -13,7 +13,7 @@ from tickforge_db import TickForgeDB
 
 KEYS = [
     "trade_id", "symbol", "price_cents", "quantity", "buy_order_id",
-    "sell_order_id", "buyer_id", "seller_id", "timestamp_ms",
+    "sell_order_id", "buyer_id", "seller_id", "timestamp_ms", "buyer_name", "seller_name",
 ]
 
 
@@ -23,6 +23,56 @@ def insert(db, trade_id, ts, symbol="AAPL", qty=60):
         buy_order_id=4021, sell_order_id=3990, buyer_id=7, seller_id=12,
         timestamp_ms=ts,
     )
+
+
+ORDER = dict(order_id=7, trader_id=25, trader_name="Kapinza", side="BUY", symbol="AAPL", quantity=100,
+             price_cents=18950, status="open", filled=0, created_ms=1000, updated_ms=1000)
+
+
+class OrdersAndNames(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def test_orders_survive_a_reopen_and_the_last_row_wins(self):
+        db = TickForgeDB(self.tmp.name)
+        db.upsert_order(**ORDER)
+        db.upsert_order(**{**ORDER, "order_id": 8, "side": "SELL", "trader_id": 3, "trader_name": "Rahul Verma"})
+        db.upsert_order(**{**ORDER, "status": "partially_filled", "filled": 40, "updated_ms": 2000})
+        del db
+        db = TickForgeDB(self.tmp.name)
+        self.assertEqual(db.order_count(), 2)
+        row = db.get_order(7)
+        self.assertEqual((row["status"], row["filled"], row["trader_name"], row["side"]), ("partially_filled", 40, "Kapinza", "BUY"))
+        self.assertEqual([o["order_id"] for o in db.list_orders()], [8, 7])
+        self.assertEqual([o["order_id"] for o in db.list_orders(trader_id=25)], [7])
+        self.assertIsNone(db.get_order(99))
+
+    def test_bad_orders_are_refused(self):
+        db = TickForgeDB(self.tmp.name)
+        for bad in ({"status": "bogus"}, {"side": "HOLD"}, {"filled": 101}, {"order_id": 0}):
+            with self.assertRaises(ValueError):
+                db.upsert_order(**{**ORDER, **bad})
+
+    def test_names_are_stored_on_the_fill_and_survive_a_reopen(self):
+        db = TickForgeDB(self.tmp.name)
+        db.insert_trade(trade_id=1, symbol="AAPL", price_cents=18950, quantity=10, buy_order_id=7,
+                        sell_order_id=8, buyer_id=25, seller_id=3, timestamp_ms=5000,
+                        buyer_name="Kapinza", seller_name="Rahul Verma")
+        db.insert_trade(trade_id=2, symbol="AAPL", price_cents=18950, quantity=10, buy_order_id=9,
+                        sell_order_id=10, buyer_id=4, seller_id=5, timestamp_ms=6000)
+        db.flush()  # the names must also survive an SSTable
+        db.insert_trade(trade_id=3, symbol="AAPL", price_cents=18960, quantity=5, buy_order_id=11,
+                        sell_order_id=12, buyer_id=6, seller_id=25, timestamp_ms=7000,
+                        buyer_name="Anil Kumar", seller_name="Kapinza")
+        del db
+        db = TickForgeDB(self.tmp.name)
+        self.assertEqual(db.get_trade(1)["seller_name"], "Rahul Verma")
+        self.assertEqual(db.get_trade(2)["buyer_name"], "")
+        mine = db.trades_by_trader(25)
+        self.assertEqual([t["trade_id"] for t in mine], [3, 1])
+        self.assertEqual(mine[0]["buyer_name"], "Anil Kumar")
+        self.assertEqual(len(db.trades_by_trader(25, limit=1)), 1)
 
 
 class IoBackendSetting(unittest.TestCase):

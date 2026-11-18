@@ -156,3 +156,17 @@ Checked on this machine (WSL2, kernel 6.18) with `engine/tools/af_xdp_probe.c`, 
 - **Tokens only, plus two lines of CSS, because a gradient is not a colour.** `--accent` is used for text, borders and charts, so it stays one solid colour, and `--accent-gradient` and `--canvas-gradient` are new tokens. Two rules in `index.css` apply them: `body` and `.bg-accent:not(:disabled)`. No component changed. Without `:not(:disabled)`, the gradient covers the plain colour a disabled button sets, which a screenshot showed.
 - **Dark mode uses the palette exactly. Light mode cannot.** `#22d3ee` on white has a contrast of about 1.8, so light mode uses darker versions of the same hues (`#0e7490` to `#6d28d9`) on pale backgrounds.
 - **Checked.** Every text colour on every background is at least 4.5 (WCAG AA) in both modes, and `--on-fill` on both ends of the gradient. The lowest are 4.60 in dark mode (`--on-fill` on violet) and 4.74 in light mode (`--up` and `--accent`). The old light `--faint` was 4.41; it is 4.91 now. `--up`, `--down`, `--warn` and `--on-fill` are unchanged.
+
+## Round 2
+
+### P1: order tracking and counterparties
+
+- **Owner of an order lives in the engine and the WAL.** Self-trade prevention has to happen inside the atomic match, so the engine must know who owns an order. A new WAL frame type 3 is type 1 plus a ; orders without an owner are still written as type 1, so old logs replay unchanged.
+- **Self-trade prevention is on by default,  turns it off.** It only does anything for orders with a , so benchmarks and old clients are unaffected. Measured on the same machine: no regression (see docs/PROGRESS.md).
+- **Own orders are skipped, not cancelled or decremented.** The incoming order matches the next order in price-time order; if nothing else crosses, the remainder rests (a trader can then have a bid above their own ask). It is the least surprising option and keeps recovery a pure replay.
+- **The engine names both traders on every trade** (, ). The API no longer depends on an in-memory order-to-trader map, which was lost on restart.
+- **Orders table is its own CRC-protected log (), not an LSM table.** It is small, updated in place per order, and needs "last row wins", which the append-and-replay log gives with ~200 lines. It is rewritten when it holds 4 times more frames than live rows.
+- **Names on fills use a flag bit in the symbol length**, so records without names stay byte-identical and old SSTables still read.
+- **Rejected orders are stored under ids from 2^62 upward**, because the engine gives a rejected order no id. The reason is stored with the row.
+- **Trader 25 is Kapinza.**  0 on  means "the order ticket" and is stored as 25. The 24 virtual traders keep ids 1 to 24;  lists them under  and Kapinza under .
+- ** scans every table** (there is no index by trader). It serves a small panel; an index is not worth it until a panel needs it on a hot path.

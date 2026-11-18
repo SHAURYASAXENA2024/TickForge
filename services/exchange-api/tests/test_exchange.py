@@ -61,13 +61,13 @@ def test_cash_and_shares_are_conserved_over_many_random_trades(client):
     assert value == 24 * START_CASH + 24 * START_SHARES * sum(prices.values())
 
 
-def test_manual_orders_have_no_account_but_the_other_side_is_updated(client):
+def test_manual_orders_belong_to_kapinza_and_the_other_side_is_updated(client):
     order(client, 0, "SELL", 19000, 10)
     order(client, 5, "BUY", 19000, 10)
     wait_for(lambda: trader(client, 5)["trades"] == 1)
     assert trader(client, 5)["cash"] == START_CASH - 190000
     trade = client.get("/trades").json()["trades"][0]
-    assert (trade["buyer_id"], trade["seller_id"]) == (5, 0)
+    assert (trade["buyer_id"], trade["seller_id"]) == (5, 25)  # manual orders belong to Kapinza
 
 
 def test_reject_and_bad_input(client):
@@ -75,6 +75,7 @@ def test_reject_and_bad_input(client):
     assert r.status_code == 409 and r.json()["detail"]["reason"] == "max_qty"
     assert order(client, 1, "HOLD", 19000, 1).status_code == 422
     assert order(client, 99, "BUY", 19000, 1).status_code == 422
+    assert order(client, 26, "BUY", 19000, 1).status_code == 422
     assert order(client, 1, "BUY", 19000, 1, symbol="NOPE").status_code == 404
     assert client.get("/traders/99").status_code == 404
 
@@ -84,6 +85,74 @@ def test_cancel(client):
     assert client.delete(f"/orders/{order_id}").status_code == 200
     assert client.delete(f"/orders/{order_id}").status_code == 409
     assert client.get("/orderbook?symbol=AAPL").json()["bids"] == []
+
+
+# ---- orders and counterparties (P1) -------------------------------------------------------------
+def orders_of(client, trader_id=25):
+    return client.get(f"/orders?trader_id={trader_id}").json()["orders"]
+
+
+def test_kapinza_orders_are_stored_with_status_and_filled_quantity(client):
+    resting = order(client, 0, "BUY", 19000, 100).json()["order_id"]   # trader 0 = the order ticket
+    row = wait_for(lambda: orders_of(client))[0]
+    assert (row["order_id"], row["trader_id"], row["trader_name"]) == (resting, 25, "Kapinza")
+    assert (row["side"], row["symbol"], row["quantity"], row["price_cents"]) == ("BUY", "AAPL", 100, 19000)
+    assert (row["status"], row["filled"]) == ("open", 0)
+
+    order(client, 4, "SELL", 19000, 30)
+    wait_for(lambda: orders_of(client)[0]["status"] == "partially_filled")
+    assert orders_of(client)[0]["filled"] == 30
+    order(client, 4, "SELL", 19000, 70)
+    wait_for(lambda: orders_of(client)[0]["status"] == "filled")
+    assert orders_of(client)[0]["filled"] == 100
+    # the sellers' orders were updated too
+    assert [o["status"] for o in orders_of(client, 4)] == ["filled", "filled"]
+    assert orders_of(client, 9) == []
+
+
+def test_fills_name_the_counterparty_for_a_buy_and_for_a_sell(client):
+    order(client, 3, "SELL", 19000, 10)                  # trader 3 is Rahul Verma
+    buy_id = order(client, 0, "BUY", 19000, 10).json()["order_id"]
+    wait_for(lambda: client.get("/traders/25/fills").json()["fills"])
+    order(client, 6, "BUY", 19500, 5)                    # trader 6 buys, Kapinza sells to them
+    sell_id = order(client, 0, "SELL", 19500, 5).json()["order_id"]
+    fills = wait_for(lambda: len(client.get("/traders/25/fills").json()["fills"]) == 2 and
+                     client.get("/traders/25/fills").json()["fills"])
+    sold, bought = fills                                  # newest first
+    assert (bought["side"], bought["counterparty_id"], bought["counterparty_name"]) == ("BUY", 3, "Rahul Verma")
+    assert (bought["price_cents"], bought["quantity"], bought["order_id"]) == (19000, 10, buy_id)
+    assert (sold["side"], sold["counterparty_id"], sold["counterparty_name"]) == ("SELL", 6, "Anil Kumar")
+    assert (sold["price_cents"], sold["quantity"], sold["order_id"]) == (19500, 5, sell_id)
+    # the names are stored on the fill itself, in the database
+    saved = {t["trade_id"]: t for t in client.get("/trades/history").json()["trades"]}
+    assert saved[bought["trade_id"]]["buyer_name"] == "Kapinza" and saved[bought["trade_id"]]["seller_name"] == "Rahul Verma"
+    assert saved[sold["trade_id"]]["seller_name"] == "Kapinza"
+    # and each fill is linked to both orders
+    assert (bought["buy_order_id"], sold["sell_order_id"]) == (buy_id, sell_id)
+    assert bought["sell_order_id"] != buy_id
+
+
+def test_a_trader_never_trades_with_their_own_resting_order(client):
+    own = order(client, 0, "SELL", 19000, 10).json()["order_id"]       # Kapinza, first in line
+    other = order(client, 7, "SELL", 19000, 10).json()["order_id"]     # trader 7 behind it
+    order(client, 0, "BUY", 19000, 10)
+    fills = wait_for(lambda: client.get("/traders/25/fills").json()["fills"])
+    assert len(fills) == 1 and fills[0]["counterparty_id"] == 7 and fills[0]["order_id"] != own
+    assert fills[0]["sell_order_id"] == other
+    assert [o["status"] for o in orders_of(client)][-1] == "open"      # Kapinza's own sell is still resting
+    assert client.get("/orderbook?symbol=AAPL").json()["asks"] == [[19000, 10]]
+
+
+def test_rejected_and_cancelled_orders_are_stored(client):
+    assert order(client, 0, "BUY", 19000, 20000).status_code == 409    # max_qty
+    kept = order(client, 0, "BUY", 18000, 5).json()["order_id"]
+    assert client.delete(f"/orders/{kept}").status_code == 200
+    rows = wait_for(lambda: len(orders_of(client)) == 2 and
+                    {r["status"] for r in orders_of(client)} == {"rejected", "cancelled"} and orders_of(client))
+    rejected = next(r for r in rows if r["status"] == "rejected")
+    assert rejected["reason"] == "max_qty" and rejected["filled"] == 0 and rejected["quantity"] == 20000
+    assert next(r for r in rows if r["order_id"] == kept)["status"] == "cancelled"
+    assert client.get("/traders/99/fills").status_code == 404
 
 
 # ---- order book ---------------------------------------------------------------------------------

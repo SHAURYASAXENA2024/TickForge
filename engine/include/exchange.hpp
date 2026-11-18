@@ -5,6 +5,7 @@
 #include "types.hpp"
 #include <atomic>
 #include <map>
+#include <utility>
 #include <vector>
 
 template <class Book> class Exchange {
@@ -13,11 +14,17 @@ public:
     for (auto &p : last_price_) p.store(0, std::memory_order_relaxed);
   }
 
+  // Self-trade prevention (on by default): an order never matches a resting order of the
+  // same trader. Orders without a trader (id 0) are not affected either way.
+  void set_self_trade_prevention(bool on) { stp_ = on; }
+
   // Match a new order. Trades are appended to `trades`.
   void new_order(const Order &order, std::vector<Trade> &trades) {
     last_seq_ = order.seq;
     size_t before = trades.size();
-    books_[order.symbol_id].add(order, next_trade_id_, trades);
+    Order in = order;
+    in.stp = stp_;
+    books_[order.symbol_id].add(std::move(in), next_trade_id_, trades);
     if (trades.size() > before)
       last_price_[order.symbol_id].store(trades.back().price, std::memory_order_relaxed);
   }
@@ -68,5 +75,6 @@ private:
   std::map<uint32_t, Book> books_; // ascending symbol id
   uint64_t last_seq_ = 0;
   uint64_t next_trade_id_ = 1;
+  bool stp_ = true;
   std::atomic<int64_t> last_price_[MAX_SYMBOL_ID + 1];
 };

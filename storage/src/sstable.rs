@@ -271,11 +271,24 @@ impl Iterator for Records {
         if let Err(e) = self.reader.read_exact(&mut head[1..]) {
             return Some(Err(e.into()));
         }
-        let sym_len = u16::from_le_bytes([head[64], head[65]]) as usize;
+        let (sym_len, named) = crate::record::head_info(&head);
         let mut rec = head.to_vec();
         rec.resize(66 + sym_len, 0);
         if let Err(e) = self.reader.read_exact(&mut rec[66..]) {
             return Some(Err(e.into()));
+        }
+        if named {
+            // Two length bytes, then the two names.
+            let mut lens = [0u8; 2];
+            if let Err(e) = self.reader.read_exact(&mut lens) {
+                return Some(Err(e.into()));
+            }
+            let at = rec.len();
+            rec.extend_from_slice(&lens);
+            rec.resize(at + 2 + lens[0] as usize + lens[1] as usize, 0);
+            if let Err(e) = self.reader.read_exact(&mut rec[at + 2..]) {
+                return Some(Err(e.into()));
+            }
         }
         match Trade::decode(&rec) {
             Some((t, _)) => Some(Ok(t)),
@@ -303,6 +316,7 @@ mod tests {
             buyer_id: id % 24,
             seller_id: (id + 1) % 24,
             timestamp_ms: ts,
+            ..Default::default()
         }
     }
 
