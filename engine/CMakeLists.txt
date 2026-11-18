@@ -28,6 +28,10 @@ add_executable(order_book_tests tests/order_book_tests.cpp)
 target_link_libraries(order_book_tests PRIVATE tickforge_wal)
 add_test(NAME order_book_tests COMMAND order_book_tests)
 
+add_executable(accounts_test tests/accounts_test.cpp)
+target_link_libraries(accounts_test PRIVATE tickforge_wal)
+add_test(NAME accounts_test COMMAND accounts_test)
+
 add_executable(wal_recovery_test tests/wal_recovery_test.cpp)
 target_link_libraries(wal_recovery_test PRIVATE tickforge_wal)
 add_test(NAME wal_recovery_test COMMAND wal_recovery_test)
@@ -56,6 +60,7 @@ set_tests_properties(replication_test PROPERTIES TIMEOUT 120)
 
 # The same crash test on the elastic queue. A ring of 2 sends nearly every queued
 # order through the overflow path.
+add_test(NAME engine_e2e_accounts COMMAND engine_e2e_test $<TARGET_FILE:engine_server> --accounts)
 add_test(NAME engine_e2e_elastic COMMAND engine_e2e_test $<TARGET_FILE:engine_server> --queue elastic)
 add_test(NAME engine_e2e_elastic_tiny_ring
          COMMAND engine_e2e_test $<TARGET_FILE:engine_server> --queue elastic --ring-size 2)
@@ -96,6 +101,11 @@ foreach(san thread address)
   add_test(NAME engine_e2e_elastic_${san}
            COMMAND engine_e2e_test $<TARGET_FILE:engine_server_${san}> --queue elastic --ring-size 8)
   set_tests_properties(engine_e2e_elastic_${san} PROPERTIES
+    FAIL_REGULAR_EXPRESSION "ThreadSanitizer|AddressSanitizer|LeakSanitizer")
+  # With accounts: connection threads check funds while the matching thread settles fills.
+  add_test(NAME engine_e2e_accounts_${san}
+           COMMAND engine_e2e_test $<TARGET_FILE:engine_server_${san}> --accounts --queue elastic --ring-size 8)
+  set_tests_properties(engine_e2e_accounts_${san} PROPERTIES
     FAIL_REGULAR_EXPRESSION "ThreadSanitizer|AddressSanitizer|LeakSanitizer")
   add_test(NAME replication_${san} COMMAND replication_test $<TARGET_FILE:engine_server_${san}>)
   set_tests_properties(replication_${san} PROPERTIES TIMEOUT 300

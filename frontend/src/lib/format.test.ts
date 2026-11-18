@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { dollars, fmtUs, parseCents, signedDollars } from "./format";
+import { dollars, fmtReservedShares, fmtUs, parseCents, signedDollars } from "./format";
+
+describe("fmtReservedShares", () => {
+  it("lists the symbols that have shares reserved", () => {
+    expect(fmtReservedShares({ AAPL: 1200, TSLA: 5 })).toBe("Reserved for open sell orders: AAPL 1,200, TSLA 5 shares");
+  });
+  it("says so when nothing is reserved", () => {
+    expect(fmtReservedShares({})).toBe("No shares reserved for open sell orders");
+    expect(fmtReservedShares({ AAPL: 0 })).toBe("No shares reserved for open sell orders");
+  });
+});
 
 describe("dollars (integer cents to text)", () => {
   it("formats whole and fractional amounts", () => {

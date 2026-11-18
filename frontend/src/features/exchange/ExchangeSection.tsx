@@ -1,6 +1,6 @@
 // The "Exchange" section: the 24 virtual traders and the trades they made (cash and shares come from real fills).
 import { Notice, Panel } from "@/components/ui";
-import { DASH, dollars, fmtInt, signedDollars } from "@/lib/format";
+import { DASH, dollars, fmtInt, fmtReservedShares, signedDollars } from "@/lib/format";
 import type { ExchangeHealth, LiveTrade, Trader } from "@/lib/exchangeApi";
 
 type Props = { online: boolean; health: ExchangeHealth | null; traders: Trader[]; trades: LiveTrade[] };
@@ -11,18 +11,19 @@ function TradersPanel({ online, traders }: { online: boolean; traders: Trader[] 
   return (
     <Panel
       title="Virtual traders"
-      description="24 accounts that trade by simple rules. Cash, shares and profit change only when one of their orders is filled."
+      description="24 accounts that trade by simple rules. Cash, shares and profit change only when one of their orders is filled. An open buy order reserves its full cost and an open sell order reserves its shares, so available cash is cash minus what is reserved."
     >
       {traders.length === 0 ? (
         <Notice title="No trader data">{online ? "Waiting for the first update." : "exchange-api is not reachable. Start the stack with ./build.sh."}</Notice>
       ) : (
         <div className="max-h-[28rem] overflow-auto">
-          <table className="w-full min-w-[40rem] text-sm">
+          <table className="w-full min-w-[46rem] text-sm">
             <thead className="sticky top-0 bg-surface text-xs text-muted">
               <tr className="border-b border-line">
                 <th className="px-4 py-2 text-left font-medium">Trader</th>
                 <th className="px-3 py-2 text-left font-medium">Strategy</th>
-                <th className="px-3 py-2 text-right font-medium">Cash</th>
+                <th className="px-3 py-2 text-right font-medium">Available cash</th>
+                <th className="px-3 py-2 text-right font-medium">Reserved</th>
                 <th className="px-3 py-2 text-right font-medium">Total value</th>
                 <th className="px-3 py-2 text-right font-medium">Realized profit</th>
                 <th className="px-3 py-2 text-right font-medium">Fills</th>
@@ -34,7 +35,8 @@ function TradersPanel({ online, traders }: { online: boolean; traders: Trader[] 
                 <tr key={t.trader_id} className="border-b border-line last:border-0 hover:bg-raised">
                   <td className="px-4 py-1.5"><span className="font-mono text-faint">{String(t.trader_id).padStart(2, "0")}</span> <span className="text-strong">{t.name}</span></td>
                   <td className="px-3 py-1.5 text-muted">{t.strategy}</td>
-                  <td className="px-3 py-1.5 text-right font-mono">{dollars(t.cash)}</td>
+                  <td className="px-3 py-1.5 text-right font-mono" title={`Cash ${dollars(t.cash)}, of which ${dollars(t.reserved_cash)} is reserved for open buy orders`}>{dollars(t.available_cash)}</td>
+                  <td className="px-3 py-1.5 text-right font-mono text-muted" title={fmtReservedShares(t.reserved_shares)}>{t.reserved_cash > 0 ? dollars(t.reserved_cash) : DASH}</td>
                   <td className="px-3 py-1.5 text-right font-mono">{dollars(t.equity)}</td>
                   <td className={`px-3 py-1.5 text-right font-mono ${t.realized_pnl > 0 ? "text-up" : t.realized_pnl < 0 ? "text-down" : "text-muted"}`}>{signedDollars(t.realized_pnl)}</td>
                   <td className="px-3 py-1.5 text-right font-mono">{t.trades}</td>

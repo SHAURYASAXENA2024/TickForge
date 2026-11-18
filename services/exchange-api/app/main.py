@@ -49,6 +49,7 @@ class Exchange:
         self.engine.on_order = self._on_order_accepted
         self.engine.on_reject = self._on_order_rejected
         self.store = None
+        self.engine_accounts: dict[int, dict] = {}  # trader id -> account as the engine reports it
         self.recent_trades: deque[dict] = deque(maxlen=500)  # newest first
         self.books: dict[str, dict] = {s: {"symbol": s, "bids": [], "asks": []} for s in ALL_SYMBOLS}
         self.state = "running" if settings.traders_start_running else "stopped"
@@ -209,14 +210,42 @@ class Exchange:
                 log.debug("order by trader %s not placed: %r", trader.trader_id, exc)
 
     async def reset_traders(self) -> None:
-        """Cancel the traders' open orders, then give every trader the starting cash and shares."""
-        for order_id in list(self.engine.owners):
+        """Cancel the virtual traders' open orders, then give each of them the starting cash and
+        shares, in the engine (which owns the balances) and here."""
+        for order_id, (owner, _) in list(self.engine.owners.items()):
+            if owner > len(self.traders):
+                continue  # Kapinza's orders are not touched by a reset
             try:
                 await self.cancel_order(order_id)
             except (EngineDown, Rejected, asyncio.TimeoutError):
                 self.engine.owners.pop(order_id, None)
+        try:
+            await self.engine.reset_accounts(1, len(self.traders))
+        except (EngineDown, Rejected, asyncio.TimeoutError):
+            log.warning("could not reset the accounts in the engine")
         for trader in self.traders:
             trader.reset(self.prices)
+        await self.refresh_accounts()
+
+    async def refresh_accounts(self) -> None:
+        """Read every account from the engine (it owns cash, shares and reservations)."""
+        if not self.engine.connected:
+            return
+        try:
+            reply = await self.engine.command("accounts")
+        except (EngineDown, asyncio.TimeoutError):
+            return
+        if not reply.get("enabled"):
+            self.engine_accounts = {}
+            return
+        self.engine_accounts = {
+            a["trader_id"]: {
+                "cash": a["cash"], "reserved_cash": a["reserved_cash"],
+                "shares": {SYMBOL_BY_ID[int(s)]: q for s, q in a["shares"].items() if int(s) in SYMBOL_BY_ID},
+                "reserved_shares": {SYMBOL_BY_ID[int(s)]: q for s, q in a["reserved_shares"].items() if int(s) in SYMBOL_BY_ID},
+            }
+            for a in reply["accounts"]
+        }
 
     # ---- order books --------------------------------------------------------------------------
     async def get_book(self, symbol: str) -> dict:
@@ -230,8 +259,8 @@ class Exchange:
         return self.books[symbol]
 
     def traders_snapshot(self) -> dict:
-        return {"traders": [t.to_dict(self.prices) for t in self.traders],
-                "manual": self.manual.to_dict(self.prices)}
+        view = lambda t: t.to_dict(self.prices, self.engine_accounts.get(t.trader_id))  # noqa: E731
+        return {"traders": [view(t) for t in self.traders], "manual": view(self.manual)}
 
     # ---- telemetry ----------------------------------------------------------------------------
     def status_message(self) -> dict:
@@ -325,6 +354,7 @@ class Exchange:
 
     async def tick(self) -> None:
         await self._send_status()
+        await self.refresh_accounts()
         if self.engine.connected:
             try:
                 for symbol in ALL_SYMBOLS:

@@ -12,15 +12,15 @@ class UringWriter;
 enum class WalIo { Write, Uring };
 
 struct WalRecord {
-  enum Type : uint8_t { NewOrder = 1, Cancel = 2 };
+  enum Type : uint8_t { NewOrder = 1, Cancel = 2, Reset = 4 };
   Type type = NewOrder;
   uint64_t seq = 0;
   uint64_t ts_ms = 0;
-  uint64_t order_id = 0; // for a cancel: the order to cancel
+  uint64_t order_id = 0; // for a cancel: the order to cancel; for a reset: the first trader id
   uint32_t symbol_id = 0;
   uint8_t side = 0; // 0 = BUY, 1 = SELL
   int64_t price = 0;
-  uint32_t qty = 0;
+  uint32_t qty = 0; // for a reset: the last trader id
   uint32_t trader = 0; // owner of a new order, 0 = none (a frame of type 3 when not 0)
 };
 

@@ -30,6 +30,8 @@ Server: `engine_server --port 9100 --wal <file>` listens on `127.0.0.1`. Each me
 {"type":"command","name":"book","symbol_id":3,"depth":10}
 {"type":"command","name":"stats"}
 {"type":"command","name":"state_hash"}
+{"type":"command","name":"accounts"}
+{"type":"reset_accounts","client_ref":19,"from":1,"to":24}
 ```
 
 `trader_id` is optional (default 0 = no owner). It is the owner of the order: it is written to the WAL with the order, it comes back as `buyer_id` / `seller_id` on every trade, and the engine never matches an order against a resting order of the same owner (see Rules). `client_ref` is any integer the client chooses. The engine echoes it in the `ack` or `reject` so the client can match replies to requests.
@@ -55,7 +57,7 @@ Server: `engine_server --port 9100 --wal <file>` listens on `127.0.0.1`. Each me
 {"type":"state_hash","hash":"9f3a1c0b5d2e7a44","last_seq":4022}
 ```
 
-- `reason` is one of: `bad_request`, `unknown_symbol`, `max_qty`, `price_band`, `unknown_order`, `read_only` (an order or cancel sent to a follower), `follower_ahead`, `diverged` (see Replication).
+- `reason` is one of: `insufficient_cash`, `insufficient_shares` (only with `--accounts`, see below), `bad_request`, `unknown_symbol`, `max_qty`, `price_band`, `unknown_order`, `read_only` (an order or cancel sent to a follower), `follower_ahead`, `diverged` (see Replication).
 - `book` levels are `[price_cents, total_qty]`, best price first, aggregated per price.
 - `order_id` of a new order equals the `seq` it was given. `trade_id` is a counter that starts at 1.
 - A `cancel` that succeeds returns `ack` with the same `order_id`; the order is gone from the book.
@@ -78,6 +80,18 @@ Server: `engine_server --port 9100 --wal <file>` listens on `127.0.0.1`. Each me
 
 - `--max-qty 10000`: reject larger orders.
 - `--band-pct 20`: once a symbol has traded, reject prices more than 20% away from the last trade price. Before the first trade there is no band.
+
+### Accounts and reservations
+
+Off unless the server is started with `--accounts` (`./build.sh` starts the stack that way). Then every `trader_id` above 0 has an account that begins with `--start-cash` cents (default 100000000, $1,000,000.00) and `--start-shares` shares (default 500) of each symbol id 1 to `--start-symbols` (default 10). Orders with `trader_id` 0 have no account and are never checked.
+
+- An accepted **buy** locks `qty x limit price` in cash. An accepted **sell** locks `qty` shares. There is no short selling.
+- A fill moves cash at the **trade price** and releases the lock of the filled part at the **limit price**, so a buyer who traded at a better price than their limit gets the difference back (price improvement). A cancel releases the lock of what is left.
+- An order the trader cannot afford is refused with `insufficient_cash` or `insufficient_shares` **before it is logged**, so it takes no sequence number. The check counts what is locked and also what was promised to orders that are logged but not yet matched, so two orders that are each affordable alone cannot both be accepted.
+- Fills never reduce what a trader can spend (a buyer's improvement is returned, a seller only converts shares into cash), so replaying the log in order can never find a shortfall that the live run did not.
+- `command accounts` replies with `{"type":"accounts","enabled":true,"accounts":[{"trader_id":3,"cash":..., "reserved_cash":..., "shares":{"1":500},"reserved_shares":{"1":120}}]}`, symbol ids as keys, only symbols with something in them.
+- `reset_accounts` (`from`, `to`, default all) cancels the open orders of those traders and puts them back to the starting balances. It is logged (WAL type 4: `u8 type, u64 seq, u64 ts_ms, u64 order_id (= from), u32 to`) and acked with `order_id` 0. It is a `bad_request` when accounts are off.
+- With accounts on, `state_hash` also covers every account (trader, cash, locked cash, then symbol, shares, locked shares for each symbol with something in it), so a recovery that gets one balance or lock wrong shows as a different hash. Without accounts the hash is exactly as before. Recovery must be started with the same flags and start values as the run that wrote the log.
 
 ### Self-trade prevention
 
@@ -141,6 +155,7 @@ frame  = len:u32  crc:u32  payload[len]
 |---|---|
 | new order (`type=1`) | `u8 type, u64 seq, u64 ts_ms, u64 order_id, u32 symbol_id, u8 side (0=BUY,1=SELL), i64 price_cents, u32 qty` |
 | new order with an owner (`type=3`) | the `type=1` layout, then `u32 trader_id` at the end |
+| reset accounts (`type=4`) | `u8 type, u64 seq, u64 ts_ms, u64 first trader id, u32 last trader id` |
 | cancel (`type=2`) | `u8 type, u64 seq, u64 ts_ms, u64 order_id` |
 
 An order without an owner is still written as `type=1`, byte for byte as before, so older logs and logs of ownerless orders are unchanged and still replay.
@@ -212,7 +227,7 @@ REST (JSON, prices in cents):
 | `GET /orderbook?symbol=AAPL` | `{symbol, bids:[[price,qty]], asks:[[price,qty]]}` |
 | `GET /trades?limit=100` | newest first |
 | `GET /trades/history?start_ms=&end_ms=&symbol=` | from `tickforge_db.range` |
-| `GET /traders`, `GET /traders/{id}` | cash (cents), holdings, realized P&L (cents), trade count. `/traders` has the 24 virtual traders under `traders` and Kapinza under `manual`; `/traders/25` is Kapinza |
+| `GET /traders`, `GET /traders/{id}` | cash, `reserved_cash`, `available_cash` (cents), holdings, `reserved_shares`, realized P&L (cents), trade count. With the engine's accounts on, cash and shares are the engine's own numbers, read on every request. `/traders` has the 24 virtual traders under `traders` and Kapinza under `manual`; `/traders/25` is Kapinza |
 | `GET /orders?trader_id=&limit=` | stored orders (status, filled quantity), newest first; `trader_id=0` means Kapinza |
 | `GET /traders/{id}/fills?limit=` | that trader's fills from the database, newest first, each with `order_id` (their own order), `side` (their side), and `counterparty_id` / `counterparty_name` (who was on the other side) |
 | `GET /symbols` | the symbol list with ids |

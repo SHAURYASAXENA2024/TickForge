@@ -155,6 +155,71 @@ def test_rejected_and_cancelled_orders_are_stored(client):
     assert client.get("/traders/99/fills").status_code == 404
 
 
+# ---- cash and share reservation (P2) --------------------------------------------------------------
+def reject_reason(response):
+    assert response.status_code == 409
+    return response.json()["detail"]["reason"]
+
+
+def test_a_resting_buy_locks_cash_and_a_cancel_gives_it_back(client):
+    oid = order(client, 3, "BUY", 19000, 100).json()["order_id"]
+    t = trader(client, 3)
+    assert (t["cash"], t["reserved_cash"], t["available_cash"]) == (START_CASH, 1_900_000, START_CASH - 1_900_000)
+    assert client.delete(f"/orders/{oid}").status_code == 200
+    t = trader(client, 3)
+    assert (t["reserved_cash"], t["available_cash"]) == (0, START_CASH)
+
+
+def test_a_resting_sell_locks_shares(client):
+    oid = order(client, 4, "SELL", 19000, 120).json()["order_id"]
+    t = trader(client, 4)
+    assert t["reserved_shares"] == {"AAPL": 120} and t["holdings"]["AAPL"] == START_SHARES
+    client.delete(f"/orders/{oid}")
+    assert trader(client, 4)["reserved_shares"] == {}
+
+
+def test_orders_without_funds_are_rejected_and_stored(client):
+    # 10,000 shares at $190.00 is $1.9 million; the trader has $1 million
+    assert reject_reason(order(client, 5, "BUY", 19000, 10_000)) == "insufficient_cash"
+    # a trader holds 500 shares: selling 501 would be a short sale
+    assert reject_reason(order(client, 5, "SELL", 19000, 501)) == "insufficient_shares"
+    assert order(client, 5, "SELL", 19000, 500).status_code == 200
+    assert reject_reason(order(client, 5, "SELL", 19000, 1)) == "insufficient_shares"  # all 500 are locked now
+    reasons = sorted(o["reason"] for o in orders_of(client, 5) if o["status"] == "rejected")
+    assert reasons == ["insufficient_cash", "insufficient_shares", "insufficient_shares"]
+    assert client.get("/orderbook").json()["asks"] == [[19000, 500]]  # rejected orders never reached the book
+
+
+def test_a_buyer_gets_the_price_improvement_back(client):
+    order(client, 2, "SELL", 18900, 100)
+    order(client, 6, "BUY", 19000, 100)  # limit $190.00, the trade prints at $189.00
+    wait_for(lambda: trader(client, 6)["trades"] == 1)
+    buyer, seller = trader(client, 6), trader(client, 2)
+    assert (buyer["cash"], buyer["reserved_cash"]) == (START_CASH - 1_890_000, 0)
+    assert buyer["holdings"]["AAPL"] == START_SHARES + 100
+    assert (seller["cash"], seller["reserved_shares"]) == (START_CASH + 1_890_000, {})
+
+
+def test_a_partial_fill_releases_only_the_filled_part(client):
+    order(client, 7, "BUY", 19000, 100)
+    order(client, 8, "SELL", 19000, 30)
+    wait_for(lambda: trader(client, 7)["trades"] == 1)
+    t = trader(client, 7)
+    assert (t["cash"], t["reserved_cash"]) == (START_CASH - 570_000, 70 * 19000)
+
+
+def test_reset_gives_every_virtual_trader_the_starting_balances_and_no_locks(client):
+    order(client, 3, "BUY", 19000, 100)
+    order(client, 4, "SELL", 18000, 10)
+    order(client, 0, "BUY", 15000, 10)  # Kapinza keeps hers
+    wait_for(lambda: trader(client, 3)["reserved_cash"] > 0)
+    with client.websocket_connect("/ws/telemetry") as ws:
+        ws.send_json({"cmd": "reset"})
+        wait_for(lambda: trader(client, 3)["reserved_cash"] == 0 and trader(client, 4)["reserved_shares"] == {})
+    assert trader(client, 3)["cash"] == START_CASH
+    assert trader(client, 25)["reserved_cash"] == 150_000
+
+
 # ---- order book ---------------------------------------------------------------------------------
 def test_order_book_endpoint_and_websocket_show_resting_orders(client):
     order(client, 1, "BUY", 18900, 40)
@@ -179,7 +244,7 @@ def test_traders_websocket_pushes_changes(client):
         order(client, 7, "BUY", 19000, 5)
         while True:  # skip updates that were sent before the fill was applied
             update = ws.receive_json()
-            if update["traders"][6]["trades"] == 1:
+            if update["traders"][6]["trades"] == 1 and update["traders"][6]["cash"] == START_CASH - 19000 * 5:
                 break
         assert update["traders"][6]["cash"] == START_CASH - 19000 * 5
 
