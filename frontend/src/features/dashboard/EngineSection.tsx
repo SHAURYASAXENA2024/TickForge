@@ -2,7 +2,7 @@
 import { useState } from "react";
 import { WhyChip } from "@/features/research/Papers";
 import { DASH, dollars, fmtInt, fmtUs } from "@/lib/format";
-import { EXCHANGE_SYMBOLS, useOrderBook, type ExchangeHealth, type LiveTrade } from "@/lib/exchangeApi";
+import { EXCHANGE_SYMBOLS, referenceLabel, useOrderBook, useReference, type ExchangeHealth, type LiveTrade } from "@/lib/exchangeApi";
 import type { EngineStats } from "@/lib/telemetry";
 import { Badge, Notice, Panel, Stat } from "@/components/ui";
 import { MyOrders } from "./MyOrders";
@@ -90,6 +90,8 @@ function BookSide({ levels, side, max }: { levels: [number, number][]; side: "bi
 
 function OrderBookPanel({ symbol, onSymbol, trades, linkLive }: { symbol: string; onSymbol: (s: string) => void; trades: LiveTrade[]; linkLive: boolean }) {
   const book = useOrderBook(symbol);
+  const reference = useReference();
+  const refPrice = reference?.prices[symbol];
   const last = trades.find((t) => t.symbol === symbol);
   const max = Math.max(1, ...(book ? [...book.asks, ...book.bids].map(([, q]) => q) : []));
   const spread = book && book.asks[0] && book.bids[0] ? book.asks[0][0] - book.bids[0][0] : null;
@@ -97,7 +99,7 @@ function OrderBookPanel({ symbol, onSymbol, trades, linkLive }: { symbol: string
   return (
     <Panel
       title="Order book"
-      description="Price-time priority. Prices are whole cents; the book comes from the engine."
+      description={`Price-time priority. Prices are whole cents; the book comes from the engine. ${referenceLabel(reference)}`}
       action={
         <>
           <WhyChip slug="gould-2013-limit-order-books" />
@@ -123,6 +125,7 @@ function OrderBookPanel({ symbol, onSymbol, trades, linkLive }: { symbol: string
           <BookSide levels={book.asks} side="ask" max={max} />
           <div className="flex items-center justify-between border-y border-line bg-canvas px-4 py-2 text-sm">
             <span className="text-muted">Spread <span className="font-mono text-strong">{spread !== null ? dollars(spread) : DASH}</span></span>
+            <span className="text-muted">Reference <span className="font-mono text-strong">{refPrice ? dollars(refPrice) : DASH}</span></span>
             <span className="text-muted">Last <span className="font-mono text-strong">{last ? dollars(last.price) : DASH}</span></span>
           </div>
           <BookSide levels={book.bids} side="bid" max={max} />

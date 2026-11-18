@@ -9,7 +9,7 @@ from app.config import Settings
 from app.main import create_app
 from app.symbols import ALL_SYMBOLS, START_PRICES
 from app.traders import START_CASH, START_SHARES, Trader
-from tests.conftest import order, wait_for
+from tests.conftest import TEST_SNAPSHOT, order, wait_for
 
 TELEMETRY_KEYS = {
     "type", "uptime_s", "speed", "submitted", "processed", "queue_depth", "orders_per_sec", "trades_total",
@@ -278,7 +278,7 @@ def test_trades_websocket_streams_new_trades(client):
 def test_missing_database_module_is_a_startup_error(engine):
     if importlib.util.find_spec("tickforge_db"):
         pytest.skip("tickforge_db is installed")
-    app = create_app(Settings(engine_port=engine.port, memory_db=False))
+    app = create_app(Settings(engine_port=engine.port, memory_db=False, reference_snapshot=TEST_SNAPSHOT))
     with pytest.raises(RuntimeError, match="tickforge_db"):
         with TestClient(app):
             pass
@@ -339,7 +339,7 @@ def test_telemetry_commands(client):
 def test_telemetry_reset_restores_traders_and_cancels_their_orders(client):
     order(client, 3, "SELL", 19000, 5)
     order(client, 7, "BUY", 19000, 5)
-    order(client, 8, "BUY", 15000, 5)  # stays on the book
+    order(client, 8, "BUY", 16000, 5)  # stays on the book
     wait_for(lambda: trader(client, 7)["trades"] == 1)
     with client.websocket_connect("/ws/telemetry") as ws:
         ws.send_json({"cmd": "reset"})
@@ -350,7 +350,8 @@ def test_telemetry_reset_restores_traders_and_cancels_their_orders(client):
 
 def test_virtual_traders_trade_by_themselves_when_running(engine):
     settings = Settings(engine_port=engine.port, memory_db=True, traders_start_running=True,
-                        orders_per_second=200, tick_seconds=0.1, reconnect_seconds=0.1)
+                        orders_per_second=200, tick_seconds=0.1, reconnect_seconds=0.1,
+                        reference_snapshot=TEST_SNAPSHOT)
     with TestClient(create_app(settings)) as c:
         wait_for(lambda: c.get("/health").json()["trades"] >= 3, timeout=15)
         everyone = c.get("/traders").json()["traders"]

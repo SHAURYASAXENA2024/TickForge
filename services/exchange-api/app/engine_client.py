@@ -34,6 +34,7 @@ class EngineClient:
         self.port = port
         self.reconnect_seconds = reconnect_seconds
         self.connected = False
+        self.connections = 0  # how many times the connection has been made (a new engine may be empty)
         # Called (synchronously, in message order) for each `trade` message.
         self.on_trade: Callable[[dict], None] = lambda trade: None
         # Called (synchronously, in message order) when the engine accepts a new order:
@@ -71,6 +72,7 @@ class EngineClient:
                 await asyncio.sleep(self.reconnect_seconds)
                 continue
             self._writer = writer
+            self.connections += 1
             self.connected = True
             log.info("connected to engine at %s:%s", self.host, self.port)
             try:
@@ -123,7 +125,7 @@ class EngineClient:
             self._on_trade(msg)
         elif kind == "book":
             self._resolve(("book", msg.get("symbol_id")), msg)
-        elif kind in ("stats", "state_hash", "accounts"):
+        elif kind in ("stats", "state_hash", "accounts", "reference"):
             self._resolve((kind,), msg)
 
     def _on_ack(self, msg: dict) -> None:
@@ -188,6 +190,12 @@ class EngineClient:
              "price": price, "qty": qty},
             trader_id, qty, (symbol_id, side, price, qty),
         )
+
+    async def set_reference(self, symbol_id: int, price: int, clear_pct: int) -> int:
+        """Set a symbol's reference price (cents). The engine measures its price band from it and
+        cancels resting orders `clear_pct` percent or more away from it."""
+        return await self._call({"type": "set_reference", "symbol_id": symbol_id, "price": price,
+                                 "clear_pct": clear_pct})
 
     async def reset_accounts(self, first: int, last: int) -> int:
         """Cancel the open orders of traders first..last in the engine and restore their starting balances."""

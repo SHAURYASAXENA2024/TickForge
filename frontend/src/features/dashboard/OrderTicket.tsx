@@ -6,7 +6,7 @@ import { WhyChip } from "@/features/research/Papers";
 import { Badge, Panel, Segmented, buttonClass, inputClass, primaryButtonClass } from "@/components/ui";
 import { DASH, dollars, fmtPct, parseCents, signedDollars } from "@/lib/format";
 import { maxDrawdownPct, pctOfCents, periodReturnPct, scenarioOutcomes, type Scenario } from "@/lib/behavior";
-import { EXCHANGE_SYMBOLS, OrderRejected, REJECT_TEXT, postOrder, type TradeSide } from "@/lib/exchangeApi";
+import { EXCHANGE_SYMBOLS, OrderRejected, REJECT_TEXT, postOrder, useReference, type TradeSide } from "@/lib/exchangeApi";
 import { getStockSnapshot } from "@/lib/stockApi";
 
 const HOLDS = [
@@ -117,10 +117,18 @@ function Review({ symbol, side, qty, priceCents, onBack, onSend, sending }: {
 export function OrderTicket({ symbol, onSymbol, online }: { symbol: string; onSymbol: (s: string) => void; online: boolean }) {
   const [side, setSide] = useState<TradeSide>("BUY");
   const [qty, setQty] = useState("100");
-  const [price, setPrice] = useState("189.50");
+  const reference = useReference();
+  const [price, setPrice] = useState("");
+  const [priceEdited, setPriceEdited] = useState(false);
   const [reviewing, setReviewing] = useState(false);
   const [sending, setSending] = useState(false);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+
+  // Until the person types a price, the box follows the reference price of the chosen symbol.
+  const refCents = reference?.prices[symbol];
+  useEffect(() => {
+    if (!priceEdited && refCents) setPrice((refCents / 100).toFixed(2));
+  }, [refCents, priceEdited, symbol]);
 
   const qtyNumber = Number(qty);
   const priceCents = parseCents(price);
@@ -174,7 +182,7 @@ export function OrderTicket({ symbol, onSymbol, online }: { symbol: string; onSy
               <input className={`${inputClass} mt-1`} inputMode="numeric" value={qty} onChange={(e) => setQty(e.target.value)} />
             </label>
             <label className="block text-xs text-muted">Limit price (USD)
-              <input className={`${inputClass} mt-1`} inputMode="decimal" value={price} onChange={(e) => setPrice(e.target.value)} />
+              <input className={`${inputClass} mt-1`} inputMode="decimal" value={price} onChange={(e) => { setPriceEdited(true); setPrice(e.target.value); }} />
             </label>
           </div>
           {problem && <p className="text-sm text-down">{problem}</p>}

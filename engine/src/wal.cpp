@@ -49,7 +49,7 @@ std::string wal_encode_frame(const WalRecord &r) {
   put(payload, r.seq, 8);
   put(payload, r.ts_ms, 8);
   put(payload, r.order_id, 8);
-  if (r.type == WalRecord::NewOrder) {
+  if (r.type == WalRecord::NewOrder || r.type == WalRecord::Reference) { // same layout; a reference price is not owned
     put(payload, r.symbol_id, 4);
     put(payload, r.side, 1);
     put(payload, static_cast<uint64_t>(r.price), 8);
@@ -78,7 +78,7 @@ static bool decode_payload(const uint8_t *p, size_t len, WalRecord &r) {
     r.qty = static_cast<uint32_t>(get(p + 25, 4));
     return true;
   }
-  if (r.type != WalRecord::NewOrder || len != (kind == 3 ? 46u : 42u)) return false;
+  if ((r.type != WalRecord::NewOrder && r.type != WalRecord::Reference) || len != (kind == 3 ? 46u : 42u)) return false;
   if (kind == 3) r.trader = static_cast<uint32_t>(get(p + 42, 4));
   r.symbol_id = static_cast<uint32_t>(get(p + 25, 4));
   r.side = p[29];

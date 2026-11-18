@@ -1,0 +1,16 @@
+{
+  "source": "test prices",
+  "as_of": "2000-01-01",
+  "prices_cents": {
+    "AAPL": 18950,
+    "TSLA": 24000,
+    "NVDA": 12000,
+    "MSFT": 41000,
+    "AMZN": 18500,
+    "GOOGL": 17000,
+    "META": 50000,
+    "JPM": 20000,
+    "BRK-B": 45000,
+    "AMD": 15000
+  }
+}

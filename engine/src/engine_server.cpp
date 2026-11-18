@@ -74,7 +74,7 @@ static void on_signal(int) { g_stop.store(true); }
 
 // One unit of work for the matching thread.
 struct Job {
-  enum Kind : uint8_t { NewOrder, Cancel, BookCmd, StatsCmd, HashCmd, AccountsCmd, Reset };
+  enum Kind : uint8_t { NewOrder, Cancel, BookCmd, StatsCmd, HashCmd, AccountsCmd, Reset, Reference, ReferenceCmd };
   Kind kind = NewOrder;
   uint32_t conn_id = 0; // who gets the reply
   int64_t client_ref = 0;
@@ -357,6 +357,7 @@ private:
     else if (type == "cancel") on_cancel(c, m, ref);
     else if (type == "command") on_command(c, m, ref);
     else if (type == "reset_accounts") on_reset(c, m, ref);
+    else if (type == "set_reference") on_reference(c, m, ref);
     else if (type == "replicate" && opt_.replicate) serve_replica(c, m, ref);
     else send_line(c, reject_json(ref, "bad_request"));
   }
@@ -387,9 +388,11 @@ private:
       send_line(c, reject_json(ref, "max_qty"));
       return;
     }
-    // The band uses the last trade price. It is read here, outside the matching
-    // thread, so it may be a moment old; replay does not repeat this check.
-    int64_t last = ex_.last_price(static_cast<uint32_t>(symbol));
+    // The band is measured from the reference price if the symbol has one, else from the last
+    // trade price. It is read here, outside the matching thread, so it may be a moment old;
+    // replay does not repeat this check.
+    int64_t last = ex_.reference(static_cast<uint32_t>(symbol));
+    if (last == 0) last = ex_.last_price(static_cast<uint32_t>(symbol));
     if (last > 0 && std::llabs(price - last) * 100 > last * opt_.band_pct) {
       send_line(c, reject_json(ref, "price_band"));
       return;
@@ -478,6 +481,50 @@ private:
     push(job);
   }
 
+  // Set a symbol's reference price and clear resting orders that are `clear_pct` percent or more
+  // away from it. Logged like an order, so replay ends with the same reference prices and books.
+  void on_reference(Conn &c, const JsonObject &m, int64_t ref) {
+    if (following()) {
+      send_line(c, reject_json(ref, "read_only"));
+      return;
+    }
+    int64_t symbol, price, clear_pct = 0;
+    if (!get_int(m, "symbol_id", symbol) || !get_int(m, "price", price)) {
+      send_line(c, reject_json(ref, "bad_request"));
+      return;
+    }
+    get_int(m, "clear_pct", clear_pct);
+    if (symbol < 1 || symbol > static_cast<int64_t>(MAX_SYMBOL_ID)) {
+      send_line(c, reject_json(ref, "unknown_symbol"));
+      return;
+    }
+    if (price <= 0 || price > 100'000'000'000LL || clear_pct < 0 || clear_pct > 1000) {
+      send_line(c, reject_json(ref, "bad_request"));
+      return;
+    }
+    std::lock_guard<std::mutex> g(ingress_mu_);
+    Job job;
+    job.kind = Job::Reference;
+    job.conn_id = c.id;
+    job.client_ref = ref;
+    job.order.seq = ++seq_;
+    job.order.symbol_id = static_cast<uint32_t>(symbol);
+    job.order.price = price;
+    job.order.qty = static_cast<uint32_t>(clear_pct);
+
+    WalRecord rec;
+    rec.type = WalRecord::Reference;
+    rec.seq = job.order.seq;
+    rec.ts_ms = now_ms();
+    rec.symbol_id = job.order.symbol_id;
+    rec.price = price;
+    rec.qty = job.order.qty;
+    write_wal(rec);
+    send_line(c, ack_json(ref, 0, job.order.seq));
+    c.produced->fetch_add(1, std::memory_order_relaxed);
+    push(job);
+  }
+
   // Put the accounts of traders `from`..`to` (default: all) back to the starting balances.
   // Their open orders are cancelled. Logged like an order, so replay does the same.
   void on_reset(Conn &c, const JsonObject &m, int64_t ref) {
@@ -522,7 +569,9 @@ private:
       send_line(c, reject_json(ref, "bad_request"));
       return;
     }
-    if (name == "accounts") {
+    if (name == "reference") {
+      job.kind = Job::ReferenceCmd;
+    } else if (name == "accounts") {
       job.kind = Job::AccountsCmd;
     } else if (name == "stats") {
       job.kind = Job::StatsCmd;
@@ -568,7 +617,7 @@ private:
 
   void push(Job &job) {
     job.pushed_ns = now_ns();
-    if (job.kind == Job::NewOrder || job.kind == Job::Cancel || job.kind == Job::Reset)
+    if (job.kind == Job::NewOrder || job.kind == Job::Cancel || job.kind == Job::Reset || job.kind == Job::Reference)
       submitted_.fetch_add(1, std::memory_order_relaxed);
     if (ring_) ring_->enqueue(job);
     else queue_.enqueue(job);
@@ -792,6 +841,9 @@ private:
     if (rec.type == WalRecord::NewOrder) {
       job.kind = Job::NewOrder;
       job.order = to_order(rec);
+    } else if (rec.type == WalRecord::Reference) {
+      job.kind = Job::Reference;
+      job.order = to_order(rec);
     } else if (rec.type == WalRecord::Reset) {
       job.kind = Job::Reset;
       job.order.seq = rec.seq;
@@ -845,6 +897,22 @@ private:
       finish(job);
       reply_to(job.conn_id, found ? ack_json(job.client_ref, job.cancel_id, job.order.seq)
                                   : reject_json(job.client_ref, "unknown_order"));
+      break;
+    }
+    case Job::Reference:
+      ex_.set_reference(job.order.seq, job.order.symbol_id, job.order.price, job.order.qty);
+      finish(job);
+      break;
+    case Job::ReferenceCmd: {
+      std::string out = "{\"type\":\"reference\",\"prices\":{";
+      bool first = true;
+      for (uint32_t s = 1; s <= MAX_SYMBOL_ID; s++) {
+        if (int64_t p = ex_.reference(s)) {
+          out += std::string(first ? "" : ",") + "\"" + std::to_string(s) + "\":" + std::to_string(p);
+          first = false;
+        }
+      }
+      reply_to(job.conn_id, out + "}}\n");
       break;
     }
     case Job::Reset:

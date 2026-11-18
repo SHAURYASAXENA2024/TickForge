@@ -181,3 +181,16 @@ Checked on this machine (WSL2, kernel 6.18) with `engine/tools/af_xdp_probe.c`, 
 - **Reset moved into the engine.** The "Reset" button cancels the virtual traders' open orders and sends `reset_accounts 1..24`; the engine cancels anything left, restores balances and logs the reset, so a restart does not bring old balances back. Kapinza (25) is not reset.
 - **A lock is released at the order's own limit.** A resting buyer trades at its own limit, so only the incoming buyer can get price improvement; the engine passes the incoming order's limit to the settle step and the trade price for resting buyers.
 - **Unknown traders get an account on first use** with the starting balances. This is deterministic, so replay creates the same accounts.
+
+### P3: real reference prices
+
+- **Only the price level is real.** Yahoo (through market-data, delayed up to 15 minutes) gives each symbol a reference price; every trade is still simulated. The UI says so: "Reference price: Yahoo (delayed up to 15 min). Trades: simulated."
+- **The engine owns the reference.** `set_reference` is a WAL record (type 5), so the band and the cleared book replay exactly after kill -9. The alternative (exchange-api cancelling orders one by one) would leave a half-cleared book if it died in the middle.
+- **Band from the reference, not the last trade.** Before, the band drifted with the last trade; with simulated trades that is a random walk away from the real price. 20% around the reference keeps order prices honest.
+- **Clearing at 5% (`reference_clear_pct`).** A new reference removes resting orders more than 5% away, so two price levels never share one book (the old 189.50 sample orders vs a real 352.20). Normal 45-second refreshes move prices far less than 5%, so the book is not wiped every time. When orders are cleared that far, the API's last-trade price for the symbol is reset to the reference too.
+- **Virtual traders quote within 2% of the reference** (the strategies' offsets are clamped), not of their own last price.
+- **Refresh every 45 s** (inside the requested 30 to 60). Prices that did not change are not sent again. After an engine restart the API asks the engine what it has and re-sends only the differences.
+- **Fallback: snapshot file.** Order: live read, else `<data dir>/reference_snapshot.json` (the last live prices the API saved), else the bundled `app/reference_snapshot.json` (real Yahoo closes of 2026-11-18, cents). If a live read fails the previous prices stay and `/reference` says `snapshot` (or `mixed` if only some symbols were read live). Tests never use the network: the live read is a function they pass in, and they use `tests/reference_prices.json`.
+- **Tests use the old sample prices on purpose** (`reference_prices.json`) so earlier tests keep their price level.
+- **Alignment with the Market and Journey tabs.** Both read the same market-data price (`price` of the 1-day series, the last bar), so the reference price equals the number those tabs show, up to market-data's 30-second cache.
+- **Live mode is the default when run with `./build.sh`** (`TICKFORGE_REFERENCE=snapshot` forces offline).

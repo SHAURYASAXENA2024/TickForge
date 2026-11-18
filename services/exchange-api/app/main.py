@@ -20,7 +20,8 @@ from app import routes
 from app.config import Settings
 from app.db import open_db
 from app.engine_client import EngineClient, EngineDown, Rejected
-from app.symbols import ALL_SYMBOLS, DEFAULT_SYMBOL, START_PRICES, SYMBOL_BY_ID, SYMBOL_IDS
+from app import reference as reference_feed
+from app.symbols import ALL_SYMBOLS, DEFAULT_SYMBOL, SYMBOL_BY_ID, SYMBOL_IDS
 from app.traders import MANUAL_ID, make_manual_trader, make_order, make_traders, trader_name
 
 log = logging.getLogger("exchange-api")
@@ -38,9 +39,14 @@ STATS_LISTS = ["lat_hist", "producers"]
 class Exchange:
     """All live state of the API: traders, recent trades, order books and WebSocket clients."""
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, reference_fetch=None) -> None:
         self.settings = settings
-        self.prices: dict[str, int] = dict(START_PRICES)  # last trade price per symbol, cents
+        # The real price level of each symbol: the engine's band and the traders' quotes are built
+        # around it. It starts from the saved snapshot and is refreshed live (see app/reference.py).
+        self.reference, self._reference_fetch = reference_feed.new_reference(settings, reference_fetch)
+        self._seeded: dict[str, int] = {}  # what the engine was last told, per symbol
+        self._seeded_connection = 0
+        self.prices: dict[str, int] = dict(self.reference.prices)  # last trade price per symbol, cents
         self.traders = make_traders(self.prices)
         self.manual = make_manual_trader(self.prices)  # Kapinza: the order ticket's account
         self._reject_seq = REJECTED_ID_BASE
@@ -78,7 +84,8 @@ class Exchange:
         self.engine.start()
         self._tasks = [asyncio.create_task(self._persist_loop()),
                        asyncio.create_task(self._order_loop()),
-                       asyncio.create_task(self._tick_loop())]
+                       asyncio.create_task(self._tick_loop()),
+                       asyncio.create_task(self._reference_loop())]
 
     async def stop(self) -> None:
         for task in self._tasks:
@@ -200,7 +207,7 @@ class Exchange:
             if self.state != "running" or not self.engine.connected:
                 continue
             trader = self.rng.choice(self.traders)
-            order = make_order(trader, self.prices, self.rng)
+            order = make_order(trader, self.reference.prices, self.rng)
             if order is None:
                 continue
             symbol, side, price, qty = order
@@ -208,6 +215,47 @@ class Exchange:
                 await self.place_order(trader.trader_id, symbol, side, price, qty)
             except (EngineDown, Rejected, asyncio.TimeoutError) as exc:
                 log.debug("order by trader %s not placed: %r", trader.trader_id, exc)
+
+    # ---- reference prices -----------------------------------------------------------------------
+    async def _reference_loop(self) -> None:
+        """Read live prices every `reference_refresh_seconds`, and make sure the engine has them."""
+        due = 0.0
+        while True:
+            try:
+                if time.monotonic() >= due:
+                    await reference_feed.refresh(self.reference, self._reference_fetch, self.settings.data_dir)
+                    due = time.monotonic() + self.settings.reference_refresh_seconds
+                await self.seed_engine()
+            except Exception:
+                log.exception("reference prices failed")
+            await asyncio.sleep(0.5)
+
+    async def seed_engine(self) -> None:
+        """Tell the engine each symbol's reference price when it differs from what it has. The engine
+        then measures its price band from it and clears resting orders far from it."""
+        if not self.engine.connected:
+            return
+        try:
+            if self._seeded_connection != self.engine.connections:
+                reply = await self.engine.command("reference")  # a restarted engine replays its own
+                self._seeded = {SYMBOL_BY_ID[int(s)]: p for s, p in reply.get("prices", {}).items() if int(s) in SYMBOL_BY_ID}
+                self._seeded_connection = self.engine.connections
+            for symbol, price in self.reference.prices.items():
+                if self._seeded.get(symbol) == price:
+                    continue
+                await self.engine.set_reference(SYMBOL_IDS[symbol], price, self.settings.reference_clear_pct)
+                old = self._seeded.get(symbol)
+                self._seeded[symbol] = price
+                last = self.prices.get(symbol, price)
+                if old is None or abs(last - price) * 100 > price * self.settings.reference_clear_pct:
+                    self.prices[symbol] = price  # the old level is gone from the book, so is its last price
+        except (EngineDown, Rejected, asyncio.TimeoutError):
+            self._seeded_connection = 0  # try again from the engine's own list
+
+    def reference_snapshot(self) -> dict:
+        ref = self.reference
+        return {"prices": dict(ref.prices), "source": ref.source, "as_of": ref.as_of, "updated_ms": ref.updated_ms,
+                "live": sorted(ref.live), "seeded": dict(self._seeded)}
 
     async def reset_traders(self) -> None:
         """Cancel the virtual traders' open orders, then give each of them the starting cash and
@@ -224,7 +272,7 @@ class Exchange:
         except (EngineDown, Rejected, asyncio.TimeoutError):
             log.warning("could not reset the accounts in the engine")
         for trader in self.traders:
-            trader.reset(self.prices)
+            trader.reset(self.reference.prices)
         await self.refresh_accounts()
 
     async def refresh_accounts(self) -> None:
@@ -372,9 +420,9 @@ class Exchange:
             await self.push_changed(ws, "traders", snapshot)
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, reference_fetch=None) -> FastAPI:
     settings = settings or Settings.from_env()
-    exchange = Exchange(settings)
+    exchange = Exchange(settings, reference_fetch)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):

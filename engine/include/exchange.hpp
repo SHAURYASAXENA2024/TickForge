@@ -5,6 +5,7 @@
 #include "accounts.hpp"
 #include "types.hpp"
 #include <atomic>
+#include <cstdlib>
 #include <map>
 #include <memory>
 #include <unordered_map>
@@ -15,6 +16,7 @@ template <class Book> class Exchange {
 public:
   Exchange() {
     for (auto &p : last_price_) p.store(0, std::memory_order_relaxed);
+    for (auto &p : ref_price_) p.store(0, std::memory_order_relaxed);
   }
 
   // Self-trade prevention (on by default): an order never matches a resting order of the
@@ -42,9 +44,31 @@ public:
     if (accts_) settle(order, trades, before);
   }
 
+  // Set the reference price of a symbol (cents). The price band is measured from it instead of
+  // from the last trade. Resting orders more than `clear_pct` percent away from the new
+  // reference are cancelled, so two price levels never sit in one book; 0 clears nothing.
+  void set_reference(uint64_t seq, uint32_t symbol, int64_t price, uint32_t clear_pct) {
+    last_seq_ = seq;
+    ref_price_[symbol].store(price, std::memory_order_relaxed);
+    auto it = books_.find(symbol);
+    if (it == books_.end() || clear_pct == 0 || price <= 0) return;
+    std::vector<uint64_t> stale;
+    it->second.for_each([&](uint64_t id, int64_t p, uint32_t) {
+      if (std::llabs(p - price) * 100 > price * static_cast<int64_t>(clear_pct)) stale.push_back(id);
+    });
+    for (uint64_t id : stale) cancel_resting(id);
+  }
+
+  // The reference price of a symbol, 0 if none. Safe to call from any thread.
+  int64_t reference(uint32_t symbol_id) const { return ref_price_[symbol_id].load(std::memory_order_relaxed); }
+
   // Returns false if the order is not resting (never existed or already filled).
   bool cancel(uint64_t seq, uint64_t order_id) {
     last_seq_ = seq;
+    return cancel_resting(order_id);
+  }
+
+  bool cancel_resting(uint64_t order_id) {
     bool found = false;
     for (auto &entry : books_)
       if (entry.second.cancel(order_id)) {
@@ -81,6 +105,7 @@ public:
     for (uint32_t t : traders) accts_->reset(t);
   }
 
+
   const Book *book(uint32_t symbol_id) const {
     auto it = books_.find(symbol_id);
     return it == books_.end() ? nullptr : &it->second;
@@ -113,6 +138,12 @@ public:
         feed(static_cast<uint64_t>(price));
         feed(qty);
       });
+    for (uint32_t s = 1; s <= MAX_SYMBOL_ID; s++) { // only symbols that have one, so the hash is unchanged without
+      const int64_t ref = ref_price_[s].load(std::memory_order_relaxed);
+      if (ref == 0) continue;
+      feed(s);
+      feed(static_cast<uint64_t>(ref));
+    }
     if (accts_) // only with accounts, so the hash of an engine without them is unchanged
       accts_->for_each([&](uint32_t trader, Account &a) {
         feed(trader);
@@ -165,4 +196,5 @@ private:
   uint64_t next_trade_id_ = 1;
   bool stp_ = true;
   std::atomic<int64_t> last_price_[MAX_SYMBOL_ID + 1];
+  std::atomic<int64_t> ref_price_[MAX_SYMBOL_ID + 1];
 };
