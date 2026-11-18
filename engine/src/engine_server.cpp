@@ -74,13 +74,15 @@ static void on_signal(int) { g_stop.store(true); }
 
 // One unit of work for the matching thread.
 struct Job {
-  enum Kind : uint8_t { NewOrder, Cancel, BookCmd, StatsCmd, HashCmd };
+  enum Kind : uint8_t { NewOrder, Cancel, BookCmd, StatsCmd, HashCmd, AccountsCmd, Reset };
   Kind kind = NewOrder;
   uint32_t conn_id = 0; // who gets the reply
   int64_t client_ref = 0;
   Order order;              // NewOrder; for Cancel only .seq is used
   uint64_t cancel_id = 0;   // Cancel
   uint32_t depth = 0;       // BookCmd (symbol is in order.symbol_id)
+  bool held = false;        // NewOrder: Accounts::hold() already promised the funds
+  uint32_t reset_to = 0;    // Reset: last trader id (the first one is in cancel_id)
   int64_t pushed_ns = 0;    // when the connection thread pushed it
 };
 
@@ -99,6 +101,10 @@ struct Options {
   int64_t max_qty = 10000;
   int64_t band_pct = 20;
   bool stp = true;   // self-trade prevention (--no-stp turns it off)
+  bool accounts = false;      // cash and share accounts with reservations (--accounts)
+  int64_t start_cash = 100'000'000; // cents
+  int64_t start_shares = 500;
+  int64_t start_symbols = 10;       // symbol ids 1..N start with start_shares
   bool pin = false;  // pin the matching thread to one core (--pin turns it on)
   int pin_core = -1; // -1: choose automatically
   bool elastic_queue = false; // ElasticRing instead of MPSCQueue
@@ -189,6 +195,8 @@ public:
   explicit Server(const Options &opt, const tf_affinity::PinPlan &plan)
       : opt_(opt), plan_(plan), start_ns_(now_ns()), win_start_ns_(start_ns_) {
     ex_.set_self_trade_prevention(opt_.stp);
+    if (opt_.accounts)
+      ex_.enable_accounts(opt_.start_cash, opt_.start_shares, static_cast<uint32_t>(opt_.start_symbols));
     if (opt_.elastic_queue) ring_ = std::make_unique<ElasticRing<Job>>(opt_.ring_size);
     std::vector<Trade> ignored;
     WalRecord last;
@@ -348,6 +356,7 @@ private:
     if (type == "new_order") on_new_order(c, m, ref);
     else if (type == "cancel") on_cancel(c, m, ref);
     else if (type == "command") on_command(c, m, ref);
+    else if (type == "reset_accounts") on_reset(c, m, ref);
     else if (type == "replicate" && opt_.replicate) serve_replica(c, m, ref);
     else send_line(c, reject_json(ref, "bad_request"));
   }
@@ -386,11 +395,26 @@ private:
       return;
     }
 
+    // Funds: an owned order must be affordable now. The amount is promised until the matching
+    // thread locks it, so two orders that are each affordable alone cannot both be accepted.
+    // A rejected order is never logged.
+    bool held = false;
+    if (trader != 0 && ex_.accounts()) {
+      const char *why = ex_.accounts()->hold(static_cast<uint32_t>(trader), side == "BUY" ? Side::Buy : Side::Sell,
+                                             static_cast<uint32_t>(symbol), price, static_cast<uint32_t>(qty));
+      if (why) {
+        send_line(c, reject_json(ref, why));
+        return;
+      }
+      held = true;
+    }
+
     // seq number, WAL write, ack and queue push happen together, so the
     // queue order is always the seq order.
     std::lock_guard<std::mutex> g(ingress_mu_);
     Job job;
     job.kind = Job::NewOrder;
+    job.held = held;
     job.conn_id = c.id;
     job.client_ref = ref;
     job.order.seq = ++seq_;
@@ -454,6 +478,41 @@ private:
     push(job);
   }
 
+  // Put the accounts of traders `from`..`to` (default: all) back to the starting balances.
+  // Their open orders are cancelled. Logged like an order, so replay does the same.
+  void on_reset(Conn &c, const JsonObject &m, int64_t ref) {
+    if (following()) {
+      send_line(c, reject_json(ref, "read_only"));
+      return;
+    }
+    int64_t from = 1, to = 1000000;
+    get_int(m, "from", from);
+    get_int(m, "to", to);
+    if (!opt_.accounts || from < 1 || to < from || to > 1000000) {
+      send_line(c, reject_json(ref, "bad_request"));
+      return;
+    }
+    std::lock_guard<std::mutex> g(ingress_mu_);
+    Job job;
+    job.kind = Job::Reset;
+    job.conn_id = c.id;
+    job.client_ref = ref;
+    job.order.seq = ++seq_;
+    job.cancel_id = static_cast<uint64_t>(from);
+    job.reset_to = static_cast<uint32_t>(to);
+
+    WalRecord rec;
+    rec.type = WalRecord::Reset;
+    rec.seq = job.order.seq;
+    rec.ts_ms = now_ms();
+    rec.order_id = job.cancel_id;
+    rec.qty = job.reset_to;
+    write_wal(rec);
+    send_line(c, ack_json(ref, 0, job.order.seq));
+    c.produced->fetch_add(1, std::memory_order_relaxed);
+    push(job);
+  }
+
   void on_command(Conn &c, const JsonObject &m, int64_t ref) {
     std::string name;
     Job job;
@@ -463,7 +522,9 @@ private:
       send_line(c, reject_json(ref, "bad_request"));
       return;
     }
-    if (name == "stats") {
+    if (name == "accounts") {
+      job.kind = Job::AccountsCmd;
+    } else if (name == "stats") {
       job.kind = Job::StatsCmd;
     } else if (name == "state_hash") {
       job.kind = Job::HashCmd;
@@ -507,7 +568,7 @@ private:
 
   void push(Job &job) {
     job.pushed_ns = now_ns();
-    if (job.kind == Job::NewOrder || job.kind == Job::Cancel)
+    if (job.kind == Job::NewOrder || job.kind == Job::Cancel || job.kind == Job::Reset)
       submitted_.fetch_add(1, std::memory_order_relaxed);
     if (ring_) ring_->enqueue(job);
     else queue_.enqueue(job);
@@ -731,6 +792,11 @@ private:
     if (rec.type == WalRecord::NewOrder) {
       job.kind = Job::NewOrder;
       job.order = to_order(rec);
+    } else if (rec.type == WalRecord::Reset) {
+      job.kind = Job::Reset;
+      job.order.seq = rec.seq;
+      job.cancel_id = rec.order_id;
+      job.reset_to = rec.qty;
     } else {
       job.kind = Job::Cancel;
       job.order.seq = rec.seq;
@@ -769,7 +835,7 @@ private:
     switch (job.kind) {
     case Job::NewOrder: {
       trades_.clear();
-      ex_.new_order(job.order, trades_);
+      ex_.new_order(job.order, trades_, job.held);
       finish(job);
       for (const Trade &t : trades_) broadcast(trade_json(t));
       break;
@@ -781,6 +847,13 @@ private:
                                   : reject_json(job.client_ref, "unknown_order"));
       break;
     }
+    case Job::Reset:
+      ex_.reset_accounts(job.order.seq, static_cast<uint32_t>(job.cancel_id), job.reset_to);
+      finish(job);
+      break;
+    case Job::AccountsCmd:
+      reply_to(job.conn_id, accounts_json());
+      break;
     case Job::BookCmd:
       reply_to(job.conn_id, book_json(job.order.symbol_id, job.depth));
       break;
@@ -804,6 +877,37 @@ private:
     int64_t us = ns / 1000;
     int bucket = us == 0 ? 0 : std::min(64 - __builtin_clzll(static_cast<unsigned long long>(us)), 15);
     lat_hist_[bucket]++;
+  }
+
+  // Every account: cash and locked cash in cents, shares and locked shares per symbol id.
+  std::string accounts_json() {
+    std::string out = "{\"type\":\"accounts\",\"enabled\":";
+    Accounts *accts = ex_.accounts();
+    out += accts ? "true" : "false";
+    out += ",\"accounts\":[";
+    bool first = true;
+    if (accts)
+      accts->for_each([&](uint32_t trader, Account &a) {
+        if (!first) out += ",";
+        first = false;
+        out += "{\"trader_id\":" + std::to_string(trader) + ",\"cash\":" + std::to_string(a.cash) +
+               ",\"reserved_cash\":" + std::to_string(a.reserved_cash) + ",\"shares\":{";
+        bool f1 = true;
+        for (size_t s = 0; s < a.shares.size(); s++) {
+          if (a.shares[s] == 0 && a.reserved_shares[s] == 0) continue;
+          out += std::string(f1 ? "" : ",") + "\"" + std::to_string(s) + "\":" + std::to_string(a.shares[s]);
+          f1 = false;
+        }
+        out += "},\"reserved_shares\":{";
+        f1 = true;
+        for (size_t s = 0; s < a.reserved_shares.size(); s++) {
+          if (a.reserved_shares[s] == 0) continue;
+          out += std::string(f1 ? "" : ",") + "\"" + std::to_string(s) + "\":" + std::to_string(a.reserved_shares[s]);
+          f1 = false;
+        }
+        out += "}}";
+      });
+    return out + "]}\n";
   }
 
   std::string book_json(uint32_t symbol, uint32_t depth) {
@@ -943,6 +1047,10 @@ static bool parse_args(int argc, char **argv, Options &opt) {
       opt.pin = a == "--pin";
       continue;
     }
+    if (a == "--accounts") {
+      opt.accounts = true;
+      continue;
+    }
     if (a == "--no-stp") {
       opt.stp = false;
       continue;
@@ -955,6 +1063,9 @@ static bool parse_args(int argc, char **argv, Options &opt) {
     std::string v = argv[++i];
     if (a == "--port") opt.port = std::atoi(v.c_str());
     else if (a == "--wal") opt.wal_path = v;
+    else if (a == "--start-cash") opt.start_cash = std::atoll(v.c_str());
+    else if (a == "--start-shares") opt.start_shares = std::atoll(v.c_str());
+    else if (a == "--start-symbols") opt.start_symbols = std::atoll(v.c_str());
     else if (a == "--max-qty") opt.max_qty = std::atoll(v.c_str());
     else if (a == "--band-pct") opt.band_pct = std::atoll(v.c_str());
     else if (a == "--queue") {
@@ -983,6 +1094,7 @@ static bool parse_args(int argc, char **argv, Options &opt) {
     else return false;
   }
   if (opt.follow_port != 0 && opt.replicate) return false; // no chains: not tested
+  if (opt.start_cash < 0 || opt.start_shares < 0 || opt.start_symbols < 0 || opt.start_symbols > 1000) return false;
   return !opt.wal_path.empty() && opt.port > 0 && opt.port < 65536 && opt.max_qty > 0 &&
          opt.band_pct > 0;
 }
@@ -994,7 +1106,7 @@ int main(int argc, char **argv) {
                  "usage: engine_server --wal <file> [--port 9100] [--max-qty 10000] "
                  "[--band-pct 20] [--pin | --no-pin] [--pin-core N] "
                  "[--queue lockfree|elastic] [--ring-size 65536] [--wal-io write|uring] "
-                 "[--replicate | --follow HOST:PORT] [--no-stp]\n");
+                 "[--replicate | --follow HOST:PORT] [--no-stp] [--accounts] [--start-cash CENTS] [--start-shares N] [--start-symbols N]\n");
     return 2;
   }
   std::signal(SIGINT, on_signal);

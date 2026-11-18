@@ -35,3 +35,11 @@ export const fmtInt = (n: number) => group(Math.round(n));
 export const fmtPct = (value: number, digits = 2) => `${value > 0 ? "+" : ""}${value.toFixed(digits)}%`;
 
 export const DASH = "–";
+
+/** {AAPL: 120, TSLA: 5} -> "Reserved for open sell orders: AAPL 120, TSLA 5 shares". */
+export function fmtReservedShares(reserved: Record<string, number>): string {
+  const parts = Object.entries(reserved)
+    .filter(([, q]) => q > 0)
+    .map(([s, q]) => `${s} ${group(q)}`);
+  return parts.length ? `Reserved for open sell orders: ${parts.join(", ")} shares` : "No shares reserved for open sell orders";
+}

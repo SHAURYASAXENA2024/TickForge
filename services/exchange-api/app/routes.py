@@ -94,7 +94,9 @@ async def get_history(request: Request, start_ms: int = 0, end_ms: int | None = 
 
 @router.get("/traders")
 async def get_traders(request: Request):
-    return _exchange(request).traders_snapshot()
+    ex = _exchange(request)
+    await ex.refresh_accounts()  # balances and locks live in the engine
+    return ex.traders_snapshot()
 
 
 @router.get("/traders/{trader_id}")
@@ -103,7 +105,8 @@ async def get_trader(trader_id: int, request: Request):
     account = ex.account(trader_id)
     if account is None:
         raise HTTPException(status_code=404, detail="no such trader")
-    return account.to_dict(ex.prices)
+    await ex.refresh_accounts()
+    return account.to_dict(ex.prices, ex.engine_accounts.get(trader_id))
 
 
 @router.get("/orders")

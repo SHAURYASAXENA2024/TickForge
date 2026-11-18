@@ -58,7 +58,9 @@ class Client:
         state = self.ask({"type": "command", "name": "state_hash"}, "state_hash")
         books = [self.ask({"type": "command", "name": "book", "symbol_id": s, "depth": 100}, "book")
                  for s in (1, 2, 3)]
-        return state, books
+        # Balances and locks of every account, not only the hash that covers them.
+        accounts = self.ask({"type": "command", "name": "accounts"}, "accounts")
+        return state, books, accounts
 
 
 def main():
@@ -75,6 +77,7 @@ def main():
         server = start(exe, port, wal, flags, log)
         client = Client(port)
         accepted = []
+        rejected = 0
         for ref in range(ORDERS):
             if accepted and rng.random() < 0.1:
                 message = {"type": "cancel", "client_ref": ref, "order_id": rng.choice(accepted[-200:])}
@@ -90,6 +93,8 @@ def main():
                     break
             if reply["type"] == "ack" and message["type"] == "new_order":
                 accepted.append(reply["order_id"])
+            elif reply["type"] == "reject" and reply.get("reason", "").startswith("insufficient"):
+                rejected += 1
 
         before = client.snapshot()
         server.send_signal(signal.SIGKILL)
@@ -104,10 +109,15 @@ def main():
     print(f"orders sent:    {ORDERS}, last_seq {before[0]['last_seq']}")
     print(f"before kill -9: {before[0]['hash']}")
     print(f"after restart:  {after[0]['hash']}")
+    if before[2]["enabled"]:
+        locked = sum(a["reserved_cash"] for a in before[2]["accounts"])
+        shares = sum(sum(a["reserved_shares"].values()) for a in before[2]["accounts"])
+        print(f"accounts:       {len(before[2]['accounts'])} traders, {locked} cents and {shares} shares locked, "
+              f"{rejected} orders rejected for funds")
     if before != after:
         print("RESULT: MISMATCH")
         return 1
-    print("RESULT: state hash and books identical")
+    print("RESULT: state hash, books, balances and locks identical")
     shutil.rmtree(work, ignore_errors=True)
     return 0
 

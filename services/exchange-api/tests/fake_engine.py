@@ -20,6 +20,10 @@ class FakeEngine:
         self.trade_id = 0
         self.books: dict[int, dict[str, list[dict]]] = {}  # symbol_id -> {"BUY": [...], "SELL": [...]}
         self.orders_seen = 0
+        # Accounts with reservations, same rules as the real engine (--accounts): a buy locks
+        # qty * limit in cash, a sell locks shares, fills settle at the trade price.
+        self.start_cash, self.start_shares, self.start_symbols = 100_000_000, 500, 10
+        self.accounts: dict[int, dict] = {}
 
     # ---- thread control -----------------------------------------------------------------------
     def start(self) -> None:
@@ -64,14 +68,34 @@ class FakeEngine:
     def _send(writer: asyncio.StreamWriter, msg: dict) -> None:
         writer.write((json.dumps(msg) + "\n").encode())
 
+    def _reset_accounts(self, msg: dict, writer: asyncio.StreamWriter) -> None:
+        lo, hi = msg.get("from", 1), msg.get("to", 10**6)
+        for sid, book in self.books.items():
+            for side in book.values():
+                for order in list(side):
+                    if lo <= order["trader"] <= hi:
+                        side.remove(order)
+        for trader in [t for t in self.accounts if lo <= t <= hi]:
+            del self.accounts[trader]
+        self.seq += 1
+        self._send(writer, {"type": "ack", "client_ref": msg["client_ref"], "order_id": 0, "seq": self.seq})
+
     def _handle(self, msg: dict, writer: asyncio.StreamWriter) -> None:
-        if msg["type"] == "new_order":
+        if msg["type"] == "reset_accounts":
+            self._reset_accounts(msg, writer)
+        elif msg["type"] == "new_order":
             self._new_order(msg, writer)
         elif msg["type"] == "cancel":
             self._cancel(msg, writer)
         elif msg["type"] == "command":
             name = msg["name"]
-            if name == "book":
+            if name == "accounts":
+                self._send(writer, {"type": "accounts", "enabled": True, "accounts": [
+                    {"trader_id": t, "cash": a["cash"], "reserved_cash": a["rc"],
+                     "shares": {str(s): q for s, q in a["shares"].items() if q or a["rs"].get(s)},
+                     "reserved_shares": {str(s): q for s, q in a["rs"].items() if q}}
+                    for t, a in sorted(self.accounts.items())]})
+            elif name == "book":
                 self._send(writer, self._book(msg["symbol_id"]))
             elif name == "stats":
                 self._send(writer, {"type": "stats", "uptime_s": 1.5, "submitted": self.orders_seen,
@@ -81,9 +105,51 @@ class FakeEngine:
                                     "producers": [self.orders_seen], "threads": 2, "cpu_pct": 1.0, "rss_mb": 10.0,
                                     "last_seq": self.seq, "state_hash": "0" * 16})
 
+    def _account(self, trader: int) -> dict:
+        if trader not in self.accounts:
+            self.accounts[trader] = {"cash": self.start_cash, "rc": 0,
+                                     "shares": {s: self.start_shares for s in range(1, self.start_symbols + 1)},
+                                     "rs": {}}
+        return self.accounts[trader]
+
+    def _afford(self, msg: dict) -> str | None:
+        trader = msg.get("trader_id", 0)
+        if not trader:
+            return None
+        a = self._account(trader)
+        if msg["side"] == "BUY":
+            return None if a["cash"] - a["rc"] >= msg["price"] * msg["qty"] else "insufficient_cash"
+        free = a["shares"].get(msg["symbol_id"], 0) - a["rs"].get(msg["symbol_id"], 0)
+        return None if free >= msg["qty"] else "insufficient_shares"
+
+    def _lock(self, order: dict, symbol_id: int, sign: int) -> None:
+        """Lock (sign 1) or release (sign -1) the funds of an order's remaining quantity."""
+        if not order["trader"]:
+            return
+        a = self._account(order["trader"])
+        if order["side"] == "BUY":
+            a["rc"] += sign * order["price"] * order["qty"]
+        else:
+            a["rs"][symbol_id] = a["rs"].get(symbol_id, 0) + sign * order["qty"]
+
+    def _settle(self, buy: dict, sell: dict, symbol_id: int, price: int, qty: int, buy_limit: int) -> None:
+        if buy["trader"]:
+            a = self._account(buy["trader"])
+            a["cash"] -= price * qty
+            a["rc"] -= buy_limit * qty
+            a["shares"][symbol_id] = a["shares"].get(symbol_id, 0) + qty
+        if sell["trader"]:
+            a = self._account(sell["trader"])
+            a["cash"] += price * qty
+            a["shares"][symbol_id] -= qty
+            a["rs"][symbol_id] -= qty
+
     def _new_order(self, msg: dict, writer: asyncio.StreamWriter) -> None:
         if msg["qty"] > 10_000:
             self._send(writer, {"type": "reject", "client_ref": msg["client_ref"], "reason": "max_qty"})
+            return
+        if (why := self._afford(msg)) is not None:
+            self._send(writer, {"type": "reject", "client_ref": msg["client_ref"], "reason": why})
             return
         self.orders_seen += 1
         self.seq += 1
@@ -91,6 +157,8 @@ class FakeEngine:
                  "trader": msg.get("trader_id", 0)}
         self._send(writer, {"type": "ack", "client_ref": msg["client_ref"], "order_id": order["id"], "seq": self.seq})
         book = self.books.setdefault(msg["symbol_id"], {"BUY": [], "SELL": []})
+        limit = order["price"]
+        self._lock(order, msg["symbol_id"], 1)
         opposite = book["SELL" if order["side"] == "BUY" else "BUY"]
         # Like the real engine: an owned order never trades with its owner's resting orders.
         def eligible():
@@ -104,13 +172,14 @@ class FakeEngine:
             if not crosses:
                 break
             qty = min(order["qty"], best["qty"])
+            buy, sell = (order, best) if order["side"] == "BUY" else (best, order)
+            self._settle(buy, sell, msg["symbol_id"], best["price"], qty, limit if order["side"] == "BUY" else best["price"])
             order["qty"] -= qty
             best["qty"] -= qty
             if best["qty"] == 0:
                 opposite.remove(best)
             self.seq += 1
             self.trade_id += 1
-            buy, sell = (order, best) if order["side"] == "BUY" else (best, order)
             trade = {"type": "trade", "trade_id": self.trade_id, "seq": self.seq, "symbol_id": msg["symbol_id"],
                      "price": best["price"], "qty": qty, "buy_order_id": buy["id"], "sell_order_id": sell["id"],
                      "taker_side": order["side"], "ts_ms": 1_767_225_600_000 + self.trade_id,
@@ -119,6 +188,7 @@ class FakeEngine:
                 self._send(client, trade)
         if order["qty"] > 0:
             book[order["side"]].append(order)
+            order["price_limit"] = limit
 
     def _cancel(self, msg: dict, writer: asyncio.StreamWriter) -> None:
         for book in self.books.values():
@@ -126,6 +196,7 @@ class FakeEngine:
                 for order in side:
                     if order["id"] == msg["order_id"]:
                         side.remove(order)
+                        self._lock(order, next(k for k, v in self.books.items() if v is book), -1)
                         self._send(writer, {"type": "ack", "client_ref": msg["client_ref"],
                                             "order_id": order["id"], "seq": self.seq})
                         return

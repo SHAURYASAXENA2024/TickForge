@@ -123,7 +123,7 @@ class EngineClient:
             self._on_trade(msg)
         elif kind == "book":
             self._resolve(("book", msg.get("symbol_id")), msg)
-        elif kind in ("stats", "state_hash"):
+        elif kind in ("stats", "state_hash", "accounts"):
             self._resolve((kind,), msg)
 
     def _on_ack(self, msg: dict) -> None:
@@ -188,6 +188,10 @@ class EngineClient:
              "price": price, "qty": qty},
             trader_id, qty, (symbol_id, side, price, qty),
         )
+
+    async def reset_accounts(self, first: int, last: int) -> int:
+        """Cancel the open orders of traders first..last in the engine and restore their starting balances."""
+        return await self._call({"type": "reset_accounts", "from": first, "to": last})
 
     async def cancel(self, order_id: int) -> int:
         return await self._call({"type": "cancel", "order_id": order_id})

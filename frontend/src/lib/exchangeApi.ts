@@ -22,8 +22,11 @@ export type Trader = {
   trader_id: number;
   name: string;
   strategy: string;
-  cash: number; // cents
+  cash: number; // cents, including the part that is reserved
+  reserved_cash: number; // cents locked by open buy orders
+  available_cash: number; // cents, cash minus reserved_cash
   holdings: Record<string, number>;
+  reserved_shares: Record<string, number>; // shares locked by open sell orders
   realized_pnl: number; // cents
   equity: number; // cents, at the last trade prices
   trades: number;

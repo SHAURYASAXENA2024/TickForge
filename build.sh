@@ -216,7 +216,7 @@ run_stack() {
   say "Starting"
   # TICKFORGE_ENGINE_FLAGS adds engine options, for example "--pin".
   # shellcheck disable=SC2086
-  start engine "$ROOT" "$ENGINE_BUILD/engine_server" --port "$ENGINE_PORT" --wal "$DATA/engine.wal" ${TICKFORGE_ENGINE_FLAGS:-}
+  start engine "$ROOT" "$ENGINE_BUILD/engine_server" --port "$ENGINE_PORT" --wal "$DATA/engine.wal" --accounts ${TICKFORGE_ENGINE_FLAGS:-}
   wait_until engine "$LAST_PID" port_open "$ENGINE_PORT"
   echo "engine          127.0.0.1:$ENGINE_PORT"
 
@@ -278,7 +278,7 @@ do_test() {
   step "C++ engine tests (ctest)" engine_tests
   step "Rust tests (cargo test)" bash -c "cd '$ROOT/storage' && cargo test"
   step "database Python binding" "$PY" -m unittest discover -s "$ROOT/storage/tests" -p 'test_python.py'
-  step "exchange-api tests (pytest)" bash -c "cd '$ROOT/services/exchange-api' && '$PY' -m pytest -q"
+  step "exchange-api tests (pytest)" bash -c "cd '$ROOT/services/exchange-api' && TICKFORGE_ENGINE_BIN='$ENGINE_BUILD/engine_server' '$PY' -m pytest -q"
   step "market-data tests (pytest)" bash -c "cd '$ROOT/services/market-data' && '$PY' -m pytest -q"
   step "frontend typecheck" bash -c "cd '$ROOT/frontend' && npm run typecheck"
   step "frontend tests (vitest)" bash -c "cd '$ROOT/frontend' && npm test"

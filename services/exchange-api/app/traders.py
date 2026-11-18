@@ -75,15 +75,26 @@ class Trader:
     def equity(self, prices: dict[str, int]) -> int:
         return self.cash + sum(qty * prices[s] for s, qty in self.holdings.items())
 
-    def to_dict(self, prices: dict[str, int]) -> dict:
+    def to_dict(self, prices: dict[str, int], account: dict | None = None) -> dict:
+        """`account` is this trader's account as the engine reports it (cash, reserved_cash,
+        shares and reserved_shares by symbol name). When given, it is the truth for balances."""
+        cash, holdings = self.cash, self.holdings
+        reserved_cash, reserved_shares = 0, {}
+        if account is not None:
+            cash, holdings = account["cash"], account["shares"]
+            reserved_cash, reserved_shares = account["reserved_cash"], account["reserved_shares"]
+        equity = cash + sum(qty * prices[s] for s, qty in holdings.items())
         return {
             "trader_id": self.trader_id,
             "name": self.name,
             "strategy": self.strategy,
-            "cash": self.cash,
-            "holdings": {s: q for s, q in self.holdings.items() if q != 0},
+            "cash": cash,
+            "reserved_cash": reserved_cash,
+            "available_cash": cash - reserved_cash,
+            "holdings": {s: q for s, q in holdings.items() if q != 0},
+            "reserved_shares": {s: q for s, q in reserved_shares.items() if q != 0},
             "realized_pnl": self.realized_pnl,
-            "equity": self.equity(prices),
+            "equity": equity,
             "trades": self.trades,
             "last_action": self.last_action,
         }
