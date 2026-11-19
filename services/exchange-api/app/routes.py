@@ -8,6 +8,7 @@ import time
 from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
+from app.ledger import compute_activity
 from app.engine_client import EngineDown, Rejected
 from app.symbols import ALL_SYMBOLS, DEFAULT_SYMBOL, SYMBOL_IDS
 from app.traders import MANUAL_ID, trader_name
@@ -140,6 +141,19 @@ async def trader_fills(trader_id: int, request: Request, limit: int = 100):
             "buyer_name": t.get("buyer_name", ""), "seller_name": t.get("seller_name", ""),
         })
     return {"trader_id": trader_id, "fills": fills}
+
+
+@router.get("/traders/{trader_id}/activity")
+async def trader_activity(trader_id: int, request: Request, symbol: str = DEFAULT_SYMBOL):
+    """Trading activity for one trader and one symbol, computed from the fills in the database
+    (FIFO lots). Values are simulated: the trades are paper trades."""
+    ex = _exchange(request)
+    if ex.account(trader_id) is None:
+        raise HTTPException(status_code=404, detail="no such trader")
+    _check_symbol(symbol)
+    trades = await ex.db(ex.store.trades_by_trader, trader_id, 1_000_000)
+    fills = [{**t, "side": "BUY" if t["buyer_id"] == trader_id else "SELL"} for t in trades if t["symbol"] == symbol]
+    return {"trader_id": trader_id, "symbol": symbol, **compute_activity(fills, ex.prices.get(symbol))}
 
 
 @router.get("/reference")

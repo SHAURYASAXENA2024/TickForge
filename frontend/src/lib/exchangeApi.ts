@@ -228,3 +228,25 @@ export function useOrderBook(symbol: string): OrderBook | null {
   }, [symbol]);
   return book;
 }
+
+/** Trading activity for one trader and one symbol, computed by exchange-api from the fills (FIFO lots). */
+export type Activity = {
+  trader_id: number;
+  symbol: string;
+  fills: number;
+  bought: number;
+  sold: number;
+  net_position: number;
+  avg_buy_cents: number | null;
+  avg_sell_cents: number | null;
+  realized_pnl_cents: number;
+  unrealized_pnl_cents: number | null;
+  closed_trades: number;
+  win_rate: number | null;
+  best_trade_cents: number | null;
+  worst_trade_cents: number | null;
+  last_price_cents: number | null;
+  simulated: boolean;
+};
+export const getActivity = (traderId: number, symbol: string) =>
+  exchangeFetch<Activity>(`/traders/${traderId}/activity?symbol=${encodeURIComponent(symbol)}`);

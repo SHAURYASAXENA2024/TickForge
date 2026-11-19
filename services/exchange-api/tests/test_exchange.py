@@ -385,3 +385,19 @@ def test_trader_average_cost_pnl_and_short_cover():
     assert (t.holdings["AAPL"], t.realized_pnl) == (-5, 600)
     t.apply_fill("AAPL", "BUY", 170, 5)            # buying the short back adds no cost basis
     assert (t.holdings["AAPL"], t.cost["AAPL"]) == (0, 0)
+
+
+def test_activity_empty_then_filled_for_kapinza(client):
+    empty = client.get("/traders/25/activity?symbol=AAPL").json()
+    assert empty["fills"] == 0 and empty["net_position"] == 0 and empty["simulated"] is True
+    order(client, 3, "SELL", 19000, 10)
+    order(client, 0, "BUY", 19000, 10)
+    wait_for(lambda: client.get("/traders/25/activity?symbol=AAPL").json()["fills"] == 1)
+    order(client, 6, "BUY", 19500, 4)
+    order(client, 0, "SELL", 19500, 4)
+    a = wait_for(lambda: (x := client.get("/traders/25/activity?symbol=AAPL").json())["fills"] == 2 and x)
+    assert (a["bought"], a["sold"], a["net_position"]) == (10, 4, 6)
+    assert a["realized_pnl_cents"] == (19500 - 19000) * 4
+    assert client.get("/traders/25/activity?symbol=TSLA").json()["fills"] == 0  # per symbol
+    assert client.get("/traders/99/activity?symbol=AAPL").status_code == 404
+    assert client.get("/traders/25/activity?symbol=NOPE").status_code == 404

@@ -194,3 +194,9 @@ Checked on this machine (WSL2, kernel 6.18) with `engine/tools/af_xdp_probe.c`, 
 - **Tests use the old sample prices on purpose** (`reference_prices.json`) so earlier tests keep their price level.
 - **Alignment with the Market and Journey tabs.** Both read the same market-data price (`price` of the 1-day series, the last bar), so the reference price equals the number those tabs show, up to market-data's 30-second cache.
 - **Live mode is the default when run with `./build.sh`** (`TICKFORGE_REFERENCE=snapshot` forces offline).
+
+## P4 trading activity (ledger)
+- **Computed on request from the fills in the database** (`GET /traders/{id}/activity?symbol=`), not stored: fills are the single source of truth, so the numbers cannot drift after a restart.
+- **FIFO on fills only.** Starting holdings of the virtual traders are not fills, so a sell beyond the bought shares opens a short lot that later buys close. One "trade" for win rate, best and worst is one closing fill (sum over the lots it closed).
+- **Unrealized P&L** marks open lots against the engine's last price for the symbol; shown as dash until a price exists.
+- Only the ten exchange symbols have activity; other Journey stocks show an explanation.
