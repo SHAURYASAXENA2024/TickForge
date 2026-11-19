@@ -1,4 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { TradingActivity } from "./TradingActivity";
 import { getJourney, StockApiError, type JourneyData, type JourneyEvent, type JourneyLongTerm, type JourneyRange } from "@/lib/stockApi";
 
 const RANGES: { id: JourneyRange; label: string }[] = [
@@ -19,9 +20,6 @@ const KIND_STYLE: Record<JourneyEvent["kind"], { dot: string; tag: string; name:
   close: { dot: "bg-accent", tag: "text-accent", name: "CLOSE" },
   split: { dot: "bg-accent", tag: "text-accent", name: "SPLIT" },
 };
-
-// Attributes that need a trade ledger. Yahoo does not say who bought or sold, so these stay empty on purpose.
-const LEDGER_FIELDS = ["Bought", "Sold", "Net position", "Avg buy price", "Avg sell price", "Realized P&L", "Unrealized P&L", "Win rate", "Best trade", "Worst trade"];
 
 // Same format as the story sentences written by the API: "$1,234.50" for USD, "1,234.50 INR" otherwise.
 const money = (value: number, currency: string) => {
@@ -581,23 +579,7 @@ function Journey({ symbol }: { symbol: string }) {
             <Tile label="Bars analysed" value={String(current.barCount)} sub={`Times in ${current.timezone}`} />
           </div>
 
-          <div>
-            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-              <div className="text-xs font-semibold text-faint">Trading activity</div>
-              <span className="rounded border border-accent/30 bg-accent/10 px-1.5 py-1 font-mono text-xs font-semibold text-accent">NEEDS LEDGER</span>
-            </div>
-            <div data-testid="ledger" className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-dashed border-line-strong bg-raised/60 sm:grid-cols-5">
-              {LEDGER_FIELDS.map((field) => (
-                <div key={field} className="bg-surface/60 px-4 py-3">
-                  <div className="text-xs font-semibold text-faint">{field}</div>
-                  <div className="mt-1.5 font-mono text-lg font-semibold text-faint">{DASH}</div>
-                </div>
-              ))}
-            </div>
-            <p className="mt-2 max-w-3xl text-xs leading-relaxed text-faint">
-              Yahoo publishes total volume only, not who bought or sold, so these stay empty on purpose. They fill in once the paper-trading ledger records fills from the order ticket.
-            </p>
-          </div>
+          <TradingActivity symbol={symbol} />
 
           <p className="text-xs leading-relaxed text-faint">{current.dataNote}</p>
         </div>
