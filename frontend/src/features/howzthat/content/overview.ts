@@ -101,7 +101,7 @@ export const SYSTEM_PROBLEMS: Problem[] = [
   {
     title: "OS scheduling and network-stack jitter",
     text: "The scheduler, the kernel network stack and the page cache add jitter to P99 and P99.99.",
-    today: "Pinning the matching thread to one core is built but off by default, because it showed no measurable gain on this virtual machine. Orders still arrive over a local TCP socket (127.0.0.1:9100), not a real network. io_uring is built but off by default because it measured slower here; XDP is future work.",
+    today: "Pinning the matching thread to one core is built but off by default, because it showed no measurable gain on this virtual machine. Orders still arrive over a local TCP socket (127.0.0.1:9100), not a real network. io_uring is built but off by default because it measured slower here.",
     status: "partial",
   },
 ];

@@ -51,6 +51,11 @@ class Exchange:
         self.traders = make_traders(self.prices)
         self.round_robin = RoundRobin(self.traders)
         self.stops = StopBook()
+        # Control of single traders and symbols: "running", "paused" (no new orders, resting orders stay)
+        # or "stopped" (no new orders, resting orders cancelled). The global state above still applies to all.
+        self.trader_state: dict[int, str] = {}
+        self.symbol_state: dict[str, str] = {}
+        self._manual_in_flight = 0
         self.manual = make_manual_trader(self.prices)  # Kapinza: the order ticket's account
         self._reject_seq = REJECTED_ID_BASE
         self.engine = EngineClient(settings.engine_host, settings.engine_port, settings.reconnect_seconds)
@@ -187,6 +192,61 @@ class Exchange:
         row["updated_ms"] = int(time.time() * 1000)
         self.store.upsert_order(**row)
 
+    def _mark_amended(self, order_id: int, new_remaining: int) -> None:
+        row = self.store.get_order(order_id)
+        if row is None or row["status"] not in ("open", "partially_filled"):
+            return
+        row["quantity"] = row["filled"] + new_remaining  # the order is now this big in total
+        row["updated_ms"] = int(time.time() * 1000)
+        self.store.upsert_order(**row)
+
+    async def amend_order(self, order_id: int, price: int | None, qty: int | None) -> dict:
+        """Change a resting order. A lower quantity at the same price is done in the engine and keeps the
+        order's place in the queue. A new price or a bigger quantity is a cancel plus a new order (a new
+        order id, at the back of the queue). `qty` is the new remaining quantity. Raises EngineDown or Rejected."""
+        row = await self.db(self.store.get_order, order_id)
+        if row is None:
+            raise Rejected("unknown_order")
+        if row["status"] not in ("open", "partially_filled"):
+            raise Rejected("not_open")
+        remaining = row["quantity"] - row["filled"]
+        new_price = row["price_cents"] if price is None else price
+        new_qty = remaining if qty is None else qty
+        if new_price == row["price_cents"] and new_qty == remaining:
+            raise Rejected("nothing_to_change")
+        if new_price == row["price_cents"] and new_qty < remaining:
+            await self.engine.amend(order_id, new_qty)
+            self._persist_queue.put_nowait(("amend", (order_id, new_qty)))
+            return {"order_id": order_id, "kind": "reduced", "keeps_priority": True, "remaining": new_qty}
+        # Replace: check what the engine would check first, so a refused replacement never costs the old order.
+        symbol = row["symbol"]
+        ref = self.reference.prices.get(symbol)
+        if ref and abs(new_price - ref) * 100 > ref * 20:
+            raise Rejected("price_band")
+        await self.refresh_accounts()
+        acct = self.engine_accounts.get(row["trader_id"])
+        if acct is not None:
+            if row["side"] == "BUY":
+                free = acct["cash"] - acct["reserved_cash"] + row["price_cents"] * remaining
+                if free < new_price * new_qty:
+                    raise Rejected("insufficient_cash")
+            else:
+                held = acct["shares"].get(symbol, 0) - acct["reserved_shares"].get(symbol, 0) + remaining
+                if held < new_qty:
+                    raise Rejected("insufficient_shares")
+        await self.cancel_order(order_id)
+        try:
+            new_id = await self.place_order(row["trader_id"], symbol, row["side"], new_price, new_qty)
+        except Rejected:
+            # something only the engine knows (such as its maximum order size): put the old order back,
+            # at the back of the queue, rather than leave the trader with nothing
+            try:
+                await self.place_order(row["trader_id"], symbol, row["side"], row["price_cents"], remaining)
+            except (EngineDown, Rejected, asyncio.TimeoutError):
+                log.exception("order %s was cancelled by an amend and could not be put back", order_id)
+            raise
+        return {"order_id": new_id, "replaced": order_id, "kind": "replaced", "keeps_priority": False, "remaining": new_qty}
+
     async def cancel_order(self, order_id: int) -> int:
         """Cancel one order in the engine and record it. Raises EngineDown or Rejected."""
         result = await self.engine.cancel(order_id)
@@ -205,6 +265,8 @@ class Exchange:
                     await self.db(lambda row=item: self.store.upsert_order(**row))
                 elif kind == "cancel":
                     await self.db(self._mark_cancelled, item)
+                elif kind == "amend":
+                    await self.db(self._mark_amended, *item)
             except Exception:
                 log.exception("could not save %s %s", kind, item)
             if kind == "trade":
@@ -214,7 +276,37 @@ class Exchange:
     async def place_order(self, trader_id: int, symbol: str, side: str, price: int, qty: int) -> int:
         """Send one order to the engine. Trader id 0 means a manual order: it belongs to Kapinza.
         Raises EngineDown or Rejected."""
-        return await self.engine.new_order(trader_id or MANUAL_ID, SYMBOL_IDS[symbol], side, price, qty)
+        if self.symbol_state.get(symbol, "running") != "running":
+            raise Rejected("symbol paused")
+        manual = (trader_id or MANUAL_ID) == MANUAL_ID
+        self._manual_in_flight += manual
+        try:
+            return await self.engine.new_order(trader_id or MANUAL_ID, SYMBOL_IDS[symbol], side, price, qty)
+        finally:
+            self._manual_in_flight -= manual
+
+    # ---- control of one trader or one symbol ----------------------------------------------------
+    async def control(self, kind: str, key, action: str) -> str:
+        """pause, resume or stop one trader (kind "trader") or one symbol (kind "symbol"). Everything else
+        keeps running. Returns the new state. A stop also cancels the resting orders it covers."""
+        state = {"pause": "paused", "resume": "running", "stop": "stopped"}[action]
+        (self.trader_state if kind == "trader" else self.symbol_state)[key] = state
+        if state == "stopped":
+            rows = await self.db(self.store.list_orders, key if kind == "trader" else None, 1000)
+            for row in rows:
+                if row["status"] in ("open", "partially_filled") and (kind == "trader" or row["symbol"] == key):
+                    try:
+                        await self.cancel_order(row["order_id"])
+                    except (EngineDown, Rejected, asyncio.TimeoutError):
+                        pass
+        await self._send_status()
+        return state
+
+    def runnable_traders(self) -> list:
+        return [t for t in self.traders if self.trader_state.get(t.trader_id, "running") == "running"]
+
+    def runnable_symbols(self) -> list[str]:
+        return [s for s in ALL_SYMBOLS if self.symbol_state.get(s, "running") == "running"]
 
     async def _order_loop(self) -> None:
         """The virtual traders: one random trader sends one order each round."""
@@ -223,8 +315,13 @@ class Exchange:
             await asyncio.sleep(1 / rate if rate > 0 else 1)
             if self.state != "running" or not self.engine.connected:
                 continue
-            trader = self.round_robin.take() if self.settings.dispatch == "roundrobin" else self.rng.choice(self.traders)
-            order = make_order(trader, self.reference.prices, self.rng)
+            if self._manual_in_flight:
+                continue  # Kapinza's orders go first: virtual traders wait until they are in the engine
+            symbols = self.runnable_symbols()
+            trader = self._next_trader()
+            if trader is None or not symbols:
+                continue
+            order = make_order(trader, self.reference.prices, self.rng, symbols)
             if order is None:
                 continue
             symbol, side, price, qty = order
@@ -232,6 +329,17 @@ class Exchange:
                 await self.place_order(trader.trader_id, symbol, side, price, qty)
             except (EngineDown, Rejected, asyncio.TimeoutError) as exc:
                 log.debug("order by trader %s not placed: %r", trader.trader_id, exc)
+
+    def _next_trader(self):
+        """The next virtual trader that is not paused or stopped (round robin, or random)."""
+        if self.settings.dispatch != "roundrobin":
+            pool = self.runnable_traders()
+            return self.rng.choice(pool) if pool else None
+        for _ in range(len(self.traders)):
+            trader = self.round_robin.take()
+            if self.trader_state.get(trader.trader_id, "running") == "running":
+                return trader
+        return None
 
     # ---- reference prices -----------------------------------------------------------------------
     async def _reference_loop(self) -> None:
@@ -325,7 +433,10 @@ class Exchange:
 
     def traders_snapshot(self) -> dict:
         view = lambda t: t.to_dict(self.prices, self.engine_accounts.get(t.trader_id))  # noqa: E731
-        return {"traders": [view(t) for t in self.traders], "manual": view(self.manual)}
+        def with_state(t):
+            return {**view(t), "state": self.trader_state.get(t.trader_id, "running")}
+        return {"traders": [with_state(t) for t in self.traders], "manual": view(self.manual),
+                "symbols": dict(self.symbol_state)}
 
     # ---- telemetry ----------------------------------------------------------------------------
     def status_message(self) -> dict:

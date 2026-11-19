@@ -7,7 +7,7 @@ export const ROADMAP: RoadmapItem[] = [
   { title: "Activity-aware compaction", stage: "planned", problem: "Compaction spikes would hurt matching latency.", why: "The main research-flavoured idea; must be compared with SILK.", needs: "The built LSM store and its size-tiered compaction; a queue-depth signal; an atomic MemTable swap.", done: "Matching P99 during compaction, throttled vs unthrottled." },
   { title: "Object pools and queue cache-line padding", stage: "planned", problem: "Heap allocation and false sharing on the hot path.", why: "Cheap to try now that a benchmark exists.", needs: "The benchmark harness.", done: "Latency distribution with and without each change." },
   { title: "Benchmark-index comparison", stage: "planned", problem: "Progress against a benchmark index is not built (the ledger for the user's own positions and P&L is).", why: "Completes the behaviour-aware UX in the research document.", needs: "Positions for the user's own orders in exchange-api; index price history.", done: "Ledger tests; optional small user study." },
-  { title: "XDP/AF_XDP, SIMD analytics", stage: "later", problem: "Kernel network overhead; slow batch analytics.", why: "Advanced; only worth it after the basics are measured.", needs: "A network ingress (XDP); analytics batches (SIMD).", done: "Each measured against the path it replaces." },
+  { title: "SIMD analytics", stage: "later", problem: "Slow batch analytics.", why: "Advanced; only worth it after the basics are measured.", needs: "Analytics batches (SIMD).", done: "Measured against the path it replaces." },
 ];
 
 // ---- 10 References --------------------------------------------------------------------------------------

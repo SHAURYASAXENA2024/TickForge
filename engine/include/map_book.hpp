@@ -44,6 +44,26 @@ public:
     return true;
   }
 
+  bool has(uint64_t order_id) const { return where_.count(order_id) != 0; }
+
+  // Lower the remaining quantity of a resting order in place. The order keeps its place in the
+  // queue. Returns the old quantity, or 0 if the order is not resting or `new_qty` is not
+  // between 1 and the old quantity minus 1.
+  uint32_t reduce(uint64_t order_id, uint32_t new_qty) {
+    auto it = where_.find(order_id);
+    if (it == where_.end() || new_qty == 0) return 0;
+    auto [price, side] = it->second;
+    Queue &q = side == Side::Buy ? bids_.find(price)->second : asks_.find(price)->second;
+    for (Order &o : q) {
+      if (o.order_id != order_id) continue;
+      if (new_qty >= o.qty) return 0;
+      const uint32_t old = o.qty;
+      o.qty = new_qty;
+      return old;
+    }
+    return 0;
+  }
+
   void levels(Side side, size_t depth, Levels &out) const {
     if (side == Side::Buy) collect(bids_, depth, out);
     else collect(asks_, depth, out);

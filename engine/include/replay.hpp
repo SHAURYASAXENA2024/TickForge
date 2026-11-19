@@ -22,6 +22,7 @@ template <class Book>
 void apply_record(Exchange<Book> &ex, const WalRecord &r, std::vector<Trade> &trades) {
   if (r.type == WalRecord::NewOrder) ex.new_order(to_order(r), trades);
   else if (r.type == WalRecord::Reference) ex.set_reference(r.seq, r.symbol_id, r.price, r.qty);
+  else if (r.type == WalRecord::Amend) ex.amend_qty(r.seq, r.order_id, r.qty);
   else if (r.type == WalRecord::Reset) ex.reset_accounts(r.seq, static_cast<uint32_t>(r.order_id), r.qty);
   else ex.cancel(r.seq, r.order_id);
 }

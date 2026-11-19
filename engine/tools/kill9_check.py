@@ -72,6 +72,7 @@ def main():
     wal = os.path.join(work, "engine.wal")
     port = 21000 + os.getpid() % 20000
     rng = random.Random(42)
+    amend_rng = random.Random(43)  # separate, so the order stream is the same as before amends existed
 
     with open(os.path.join(work, "engine.log"), "w") as log:
         server = start(exe, port, wal, flags, log)
@@ -81,6 +82,9 @@ def main():
         for ref in range(ORDERS):
             if accepted and rng.random() < 0.1:
                 message = {"type": "cancel", "client_ref": ref, "order_id": rng.choice(accepted[-200:])}
+            elif accepted and amend_rng.random() < 0.08:  # lower the quantity of a recent order
+                message = {"type": "amend", "client_ref": ref, "order_id": amend_rng.choice(accepted[-200:]),
+                           "qty": amend_rng.randint(1, 60)}
             else:
                 message = {"type": "new_order", "client_ref": ref, "trader_id": rng.randint(0, 5),
                            "symbol_id": rng.randint(1, 3),

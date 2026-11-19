@@ -68,6 +68,30 @@ public:
     return cancel_resting(order_id);
   }
 
+  enum class Amend { Done, Unknown, Bad };
+
+  // Lower the remaining quantity of a resting order to `new_qty`. The order keeps its place in
+  // the queue (time priority); the lock of the quantity taken off is released. Raising the
+  // quantity or changing the price is not done here: that is a cancel plus a new order.
+  Amend amend_qty(uint64_t seq, uint64_t order_id, uint32_t new_qty) {
+    last_seq_ = seq;
+    for (auto &entry : books_) {
+      if (!entry.second.has(order_id)) continue;
+      const uint32_t old = entry.second.reduce(order_id, new_qty);
+      if (old == 0) return Amend::Bad;
+      if (accts_) {
+        auto it = open_.find(order_id);
+        if (it != open_.end()) {
+          Open &o = it->second;
+          accts_->release(o.trader, o.side, o.symbol, o.price, old - new_qty);
+          o.remaining = new_qty;
+        }
+      }
+      return Amend::Done;
+    }
+    return Amend::Unknown;
+  }
+
   bool cancel_resting(uint64_t order_id) {
     bool found = false;
     for (auto &entry : books_)

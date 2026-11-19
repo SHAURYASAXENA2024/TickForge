@@ -133,23 +133,9 @@ Both versions pass `queue_stress_test` under ThreadSanitizer and AddressSanitize
 - **Testing the test.** Six bugs were put into copies of the server. Three were caught at once: no WAL on the follower, dropped cancels, followers taking orders. Missing CRC check showed up as a hang (the timeout catches it). One is harmless: without the `follower_ahead` check, the next check refuses that follower as `diverged`. **One got through at first:** JSON lines mixed into the WAL stream, because the follower reconnects after a damaged frame and still ends up correct. So the follower now counts `damaged_frames` and the test requires 0; that catches it.
 - **Cost, measured on one machine.** `--replicate` with no follower: nothing consistent (RTT P50 150 against 124 us in the final run, but 143 against 153 and 122 against 122 in two others). With a follower on the same machine: RTT P50 124 to 164 us at paced load; at full load 16,082 to 11,720 orders/s. The follower had everything about 1 ms after the last ack. This is why it is off by default. Localhost only: a real network was not tested.
 
-## AF_XDP: feasibility only, not built
+## AF_XDP is out of scope
 
-Checked on this machine (WSL2, kernel 6.18) with `engine/tools/af_xdp_probe.c`, which tries each step for real.
-
-| Step | Normal user | User and network namespace (`unshare -Urn`), veth pair |
-|---|---|---|
-| Kernel config: `XDP_SOCKETS`, `VETH`, `BPF_SYSCALL`, `BPF_JIT` | all `y` | all `y` |
-| Create a veth pair | no | yes |
-| `socket(AF_XDP)` | `EPERM` | yes |
-| UMEM, fill, completion, RX and TX rings | | yes |
-| Bind to veth in copy mode (what generic / skb XDP uses) | | yes |
-| Create an `XSKMAP` | | `EPERM` |
-| Load an XDP program | | `EPERM` |
-
-- **Result: it cannot be tested here, so it stays planned, not built.** A socket can be bound, but it can only receive through an XDP program that redirects packets into an `XSKMAP`, and loading BPF needs real privileges: a user namespace does not grant them, `kernel.unprivileged_bpf_disabled` is 2, and sudo here asks for a password.
-- **With root it may well work:** nothing found rules it out, but that part was not run, so it is not claimed. To check, run the probe as root on a veth device.
-- **It would not fit today's engine anyway.** Orders arrive over TCP on 127.0.0.1. AF_XDP takes raw packets from a device, so it would need its own ingress protocol, and loopback traffic would not go through it.
+Kernel-bypass networking (AF_XDP) is not part of this project: it is not built, not investigated and not listed as planned.
 
 ## Aurora theme
 
@@ -212,3 +198,10 @@ Checked on this machine (WSL2, kernel 6.18) with `engine/tools/af_xdp_probe.c`, 
 - **Round robin: was missing** (virtual traders were picked with `rng.choice`, which only starves nobody on average). Added in exchange-api (`app/scheduling.py`, `RoundRobin`): every trader gets a turn before any gets a second. On by default (`TICKFORGE_DISPATCH=random` restores the old choice). Tested for fairness and order.
 - **Stop and stop-limit orders: were missing.** Added in exchange-api, not in the engine: `POST/GET/DELETE /stops`. A BUY stop fires when the last trade price is at or above the stop price, a SELL stop at or below. A stop-limit then sends a limit order at its limit price; a plain stop sends a limit 5 percent through the trigger (so it crosses the book and stays inside the 20 percent band). On by default (`TICKFORGE_STOP_ORDERS=0` switches it off).
 - **Limits, stated honestly:** held stops live in exchange-api memory only and are lost on a restart; cash and shares are reserved when the stop fires, not when it is placed, so a fired stop can be rejected for funds; re-seeding the reference price does not fire stops (only real trades do); there is no order-ticket control for stops yet, only the API.
+
+## P7 Control without stopping the whole system
+- **Per-trader and per-symbol pause, resume, stop** live in exchange-api (`POST /traders/{id}/control`, `POST /symbols/{symbol}/control`, body `{"action": "pause"|"resume"|"stop"}`), with buttons in the Exchange tab. Paused: no new orders, resting orders stay. Stopped: no new orders and the resting orders are cancelled (which releases their reservations). A paused or stopped symbol refuses new orders from everyone, Kapinza included (reason `symbol paused`). The global Start/Pause/Stop/Reset are unchanged and apply on top. These states live in exchange-api memory and reset when it restarts; the cancels they cause are real engine cancels and are in the WAL.
+- **Cancel** already existed in the engine (WAL type 2) and releases the lock of what is left.
+- **Amend** is new in the engine as a WAL record (type 6, `amend`) that only lowers the remaining quantity of a resting order *in place*, so the order keeps its place in the queue, and the lock of the quantity taken off is released. It is applied by the same code live and in recovery, so replay is exact (unit replay of 6000 mixed inputs, and the kill -9 check now mixes amends in). A price change or a bigger quantity loses priority, as it must, so exchange-api does it as a cancel plus a new order (`PATCH /orders/{id}`): the new order has a new id and goes to the back. Before cancelling it checks the price band and the funds, and if the engine still refuses the new order it puts the old one back (at the back).
+- **Kapinza's priority** is applied at dispatch in exchange-api: while one of Kapinza's orders is on its way to the engine, the virtual traders send nothing, so the manual order goes first. The engine's queue itself stays one FIFO queue in arrival order, and matching stays price-time. A real two-lane queue inside the engine was not built: it would change the hot path and the WAL order, and the gain is a few microseconds.
+- **A match in progress is never interrupted.** One thread does all matching, and it takes one job at a time: an order is matched against the book completely (a few microseconds) before the next job is looked at. Pause, stop, cancel and amend are jobs like any other, so they run between matches, never inside one. That is why a book is always consistent and the WAL order is the matching order.

@@ -26,10 +26,6 @@ const STATE_TEXT: Record<EngineState, string> = {
   stopped: "Virtual traders stopped",
 };
 
-const PLANNED = [
-  "Kernel bypass networking (AF_XDP)",
-];
-
 export default function Dashboard() {
   const { link, engineState, engineError, stats, send } = useTelemetry();
   const { health, online, traders, trades } = useExchange();
@@ -110,7 +106,7 @@ export default function Dashboard() {
 
         <section id="status" className="scroll-mt-20 space-y-4 py-8">
           <h2 className="text-xl font-semibold text-strong">Status</h2>
-          <div className="grid gap-4 md:grid-cols-2">
+          <div className="grid gap-4">
             <Panel title="Running now" description="Read from the live services, not from a list.">
               <dl className="divide-y divide-line text-sm">
                 {([
@@ -125,11 +121,6 @@ export default function Dashboard() {
                   </div>
                 ))}
               </dl>
-            </Panel>
-            <Panel title="Planned, not built" action={<Badge kind="planned" />}>
-              <ul className="divide-y divide-line text-sm">
-                {PLANNED.map((item) => <li key={item} className="px-4 py-2.5 text-muted">{item}</li>)}
-              </ul>
             </Panel>
           </div>
         </section>

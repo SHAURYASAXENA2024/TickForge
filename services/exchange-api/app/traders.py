@@ -140,9 +140,9 @@ def _plan(strategy: str, rng: random.Random) -> tuple[str, int, int, int]:
     return side, rng.randint(-100, 100), 5, 200  # "random"
 
 
-def make_order(trader: Trader, prices: dict[str, int], rng: random.Random):
+def make_order(trader: Trader, prices: dict[str, int], rng: random.Random, symbols: list[str] | None = None):
     """Return (symbol, side, price_cents, qty) for this trader, or None if it cannot trade."""
-    symbol = rng.choice(ALL_SYMBOLS)
+    symbol = rng.choice(symbols or ALL_SYMBOLS)
     side, bp, qty_min, qty_max = _plan(trader.strategy, rng)
     # Quote around the reference price, never further than 2 percent from it.
     price = max(1, prices[symbol] * (10_000 + max(-QUOTE_BAND_BP, min(QUOTE_BAND_BP, bp))) // 10_000)
