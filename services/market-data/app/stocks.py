@@ -18,7 +18,9 @@ log = logging.getLogger("market-data")
 SYMBOL_RE = re.compile(r"^[A-Za-z0-9.\-^=]{1,12}$")
 # The only (range -> interval) pairs the API will forward to Yahoo. The interval is fixed per range,
 # so a client cannot ask for combinations Yahoo rejects or for unbounded amounts of data.
-RANGE_TO_INTERVAL = {"1d": "5m", "5d": "15m", "1mo": "1d", "6mo": "1d", "1y": "1d"}
+RANGE_TO_INTERVAL = {"1d": "5m", "1mo": "1d", "6mo": "1d", "1y": "1d", "max": "1wk"}
+# MAX is weekly bars, or monthly when the listing is longer than this many years (keeps the bar count near 1500 at most)
+MAX_MONTHLY_AFTER_YEARS = 25
 CACHE_TTL_SECONDS = 30
 CACHE_MAX_ENTRIES = 200
 STALE_BAR_SECONDS = 20 * 60  # last bar older than this => market treated as closed
@@ -49,6 +51,10 @@ class Provider(Protocol):
 
     def info(self, symbol: str) -> dict[str, Any]:
         """Optional extras: currency, year_high, year_low. Missing keys are fine."""
+        ...
+
+    def actions(self, symbol: str) -> pd.DataFrame:
+        """Optional: dividends and splits ("Dividends", "Stock Splits" columns). May be empty."""
         ...
 
 
@@ -86,6 +92,16 @@ class YahooProvider:
         except Exception:  # extras only: the chart still works without them
             log.warning("no extra info for %s", symbol)
             return {}
+
+
+    def actions(self, symbol: str) -> pd.DataFrame:
+        import yfinance as yf
+
+        try:
+            return _with_timeout(lambda: yf.Ticker(symbol).actions)
+        except Exception:  # extras only
+            log.warning("no dividends or splits for %s", symbol)
+            return pd.DataFrame()
 
 
 provider: Provider = YahooProvider()
@@ -132,8 +148,9 @@ def _validate(symbol: str, range: str, interval: str | None = None) -> str:
         raise InvalidSymbol(symbol)
     if range not in RANGE_TO_INTERVAL:
         raise InvalidParameter(f"range must be one of {', '.join(RANGE_TO_INTERVAL)}")
-    if interval is not None and interval != RANGE_TO_INTERVAL[range]:
-        raise InvalidParameter(f"interval for range {range} must be {RANGE_TO_INTERVAL[range]}")
+    allowed = (RANGE_TO_INTERVAL[range], "1mo") if range == "max" else (RANGE_TO_INTERVAL[range],)
+    if interval is not None and interval not in allowed:
+        raise InvalidParameter(f"interval for range {range} must be {' or '.join(allowed)}")
     return symbol.upper()
 
 
@@ -221,6 +238,16 @@ def get_journey_data(symbol: str, range: str = "1d"):
     history = provider.history(symbol, range, interval)
     if history.empty:
         raise StockNotFound(f"No data found for {symbol}")
+    actions = None
+    if range == "max":
+        span_years = (history.index[-1] - history.index[0]).days / 365.25
+        if span_years > MAX_MONTHLY_AFTER_YEARS:
+            interval = "1mo"
+            history = provider.history(symbol, range, interval)
+            if history.empty:
+                raise StockNotFound(f"No data found for {symbol}")
+        getter = getattr(provider, "actions", None)
+        actions = getter(symbol) if getter else None
 
     previous_close = None
     if range == "1d":
@@ -237,6 +264,7 @@ def get_journey_data(symbol: str, range: str = "1d"):
             year_high=_finite_or_none(info.get("year_high")),
             year_low=_finite_or_none(info.get("year_low")),
             symbol=symbol,
+            actions=actions,
         )
     except ValueError:
         raise StockNotFound(f"No usable price data for {symbol}")

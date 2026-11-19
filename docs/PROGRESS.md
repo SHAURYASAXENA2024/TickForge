@@ -24,6 +24,7 @@ Machine: 12th Gen Intel i5-12450H, 12 logical cores, 7.6 GiB, WSL2 Ubuntu (kerne
 | P2 cash and share reservation | about 120 | done | ctest 23 of 23 incl. accounts_test and accounts crash tests under TSan and ASan, exchange-api 27 passed (incl. real engine kill -9 test), frontend 28 passed, `./build.sh kill9 --accounts`: hash `f58ad75f742e45a5` and balances and locks identical (418505260 cents and 15488 shares locked, 7597 rejected for funds), bench no regression (book 9.99 M ops/s, paced RTT P50 105.6 us, saturated 19243 orders/s) |
 | P3 real reference prices | about 60 | done | ctest 26 of 26 (reference_test also under TSan and ASan), exchange-api 36 passed, frontend 28 passed, kill9 --accounts hash d81d2b87eda5de0c identical, bench saturated 19102 orders/s (baseline 14221) |
 | P4 trading activity (ledger) | about 25 | done | exchange-api 42 passed 1 skipped (5 hand-computed ledger tests, endpoint test), frontend 30 passed, ctest 26 of 26, kill9 --accounts hash d81d2b87eda5de0c identical; engine untouched, no bench needed |
+| P5 Journey ranges | about 20 | done | market-data 28 passed (hand-computed long-term test, weekly vs monthly MAX, every range, 5D refused), frontend 32 passed (real MAX fixture parsed), engine untouched |
 
 ## Baseline benchmarks (unmodified engine, , full numbers in docs/BENCHMARKS.md)
 
