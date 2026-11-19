@@ -56,7 +56,7 @@ std::string wal_encode_frame(const WalRecord &r) {
     put(payload, r.qty, 4);
     if (owned) put(payload, r.trader, 4);
   }
-  if (r.type == WalRecord::Reset) put(payload, r.qty, 4);
+  if (r.type == WalRecord::Reset || r.type == WalRecord::Amend) put(payload, r.qty, 4);
   std::string frame;
   put(frame, payload.size(), 4);
   put(frame, crc32(reinterpret_cast<const uint8_t *>(payload.data()), payload.size()), 4);
@@ -73,7 +73,7 @@ static bool decode_payload(const uint8_t *p, size_t len, WalRecord &r) {
   r.ts_ms = get(p + 9, 8);
   r.order_id = get(p + 17, 8);
   if (r.type == WalRecord::Cancel) return len == 25;
-  if (r.type == WalRecord::Reset) {
+  if (r.type == WalRecord::Reset || r.type == WalRecord::Amend) {
     if (len != 29) return false;
     r.qty = static_cast<uint32_t>(get(p + 25, 4));
     return true;

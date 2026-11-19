@@ -105,6 +105,8 @@ class FakeEngine:
             self._new_order(msg, writer)
         elif msg["type"] == "cancel":
             self._cancel(msg, writer)
+        elif msg["type"] == "amend":
+            self._amend(msg, writer)
         elif msg["type"] == "command":
             name = msg["name"]
             if name == "reference":
@@ -224,6 +226,24 @@ class FakeEngine:
                         self._send(writer, {"type": "ack", "client_ref": msg["client_ref"],
                                             "order_id": order["id"], "seq": self.seq})
                         return
+        self._send(writer, {"type": "reject", "client_ref": msg["client_ref"], "reason": "unknown_order"})
+
+    def _amend(self, msg: dict, writer: asyncio.StreamWriter) -> None:
+        """Lower the quantity of a resting order; it keeps its place in the list."""
+        for symbol_id, book in self.books.items():
+            for side in book.values():
+                for order in side:
+                    if order["id"] != msg["order_id"]:
+                        continue
+                    if not 0 < msg["qty"] < order["qty"]:
+                        self._send(writer, {"type": "reject", "client_ref": msg["client_ref"], "reason": "bad_request"})
+                        return
+                    self._lock(order, symbol_id, -1)
+                    order["qty"] = msg["qty"]
+                    self._lock(order, symbol_id, 1)
+                    self.seq += 1
+                    self._send(writer, {"type": "ack", "client_ref": msg["client_ref"], "order_id": order["id"], "seq": self.seq})
+                    return
         self._send(writer, {"type": "reject", "client_ref": msg["client_ref"], "reason": "unknown_order"})
 
     def _book(self, symbol_id: int) -> dict:

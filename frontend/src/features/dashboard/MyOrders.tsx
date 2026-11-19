@@ -2,12 +2,13 @@
 // Nothing here is kept in the browser: every row is fetched again every couple of seconds.
 import { useCallback, useEffect, useState } from "react";
 import { Badge, Notice, Panel, buttonClass } from "@/components/ui";
-import { DASH, dollars, fmtInt } from "@/lib/format";
+import { DASH, dollars, fmtInt, parseCents } from "@/lib/format";
 import {
   MANUAL_TRADER_ID,
   MANUAL_TRADER_NAME,
   OrderRejected,
   REJECT_TEXT,
+  amendOrder,
   cancelOrder,
   getFills,
   getOrders,
@@ -59,6 +60,28 @@ export function MyOrders({ online }: { online: boolean }) {
     return () => window.clearInterval(timer);
   }, [load]);
 
+  // Amend: lower the quantity at the same price (keeps the place in the queue) or give a new price or a bigger
+  // quantity (cancel plus a new order: the place in the queue is lost).
+  const [editing, setEditing] = useState<{ id: number; qty: string; price: string; remaining: number; cents: number } | null>(null);
+  const applyAmend = async () => {
+    if (!editing) return;
+    setNote(null);
+    const qty = Number(editing.qty);
+    const price = parseCents(editing.price);
+    if (!Number.isInteger(qty) || qty <= 0 || price === null) {
+      setNote("Enter a whole number of shares and a price such as 189.50.");
+      return;
+    }
+    try {
+      const r = await amendOrder(editing.id, { qty: qty === editing.remaining ? undefined : qty, price: price === editing.cents ? undefined : price });
+      setNote(r.keeps_priority ? "Amended. The order keeps its place in the queue." : "Replaced with a new order at the back of the queue.");
+      setEditing(null);
+    } catch (e) {
+      setNote(e instanceof OrderRejected ? REJECT_TEXT[e.reason] ?? `Not amended: ${e.reason.replace(/_/g, " ")}.` : "The order could not be amended.");
+    }
+    void load();
+  };
+
   const cancel = async (orderId: number) => {
     setNote(null);
     try {
@@ -86,6 +109,20 @@ export function MyOrders({ online }: { online: boolean }) {
       ) : (
         <div className="space-y-4 p-4">
           {note && <p role="status" className="text-sm text-down">{note}</p>}
+          {editing && (
+            <form className="flex flex-wrap items-end gap-3 rounded border border-line p-3 text-sm" onSubmit={(e) => { e.preventDefault(); void applyAmend(); }}>
+              <span className="text-strong">Amend order #{editing.id}</span>
+              <label className="flex flex-col text-xs text-muted">Shares left
+                <input aria-label="New remaining shares" className="w-24 rounded border border-line bg-surface px-2 py-1 font-mono text-sm text-strong" value={editing.qty} onChange={(e) => setEditing({ ...editing, qty: e.target.value })} inputMode="numeric" />
+              </label>
+              <label className="flex flex-col text-xs text-muted">Limit price
+                <input aria-label="New limit price" className="w-28 rounded border border-line bg-surface px-2 py-1 font-mono text-sm text-strong" value={editing.price} onChange={(e) => setEditing({ ...editing, price: e.target.value })} inputMode="decimal" />
+              </label>
+              <button type="submit" className={buttonClass}>Apply</button>
+              <button type="button" className={buttonClass} onClick={() => setEditing(null)}>Close</button>
+              <p className="basis-full text-xs text-muted">A lower quantity at the same price keeps your place in the queue. A new price or a bigger quantity cancels the order and places a new one at the back.</p>
+            </form>
+          )}
           <div className="overflow-x-auto">
             <table className="w-full min-w-[640px] text-left text-sm">
               <caption className="sr-only">Orders placed by {MANUAL_TRADER_NAME}</caption>
@@ -114,7 +151,10 @@ export function MyOrders({ online }: { online: boolean }) {
                     </td>
                     <td className="py-1.5 text-right">
                       {(o.status === "open" || o.status === "partially_filled") && (
-                        <button type="button" className={buttonClass} onClick={() => void cancel(o.order_id)}>Cancel</button>
+                        <span className="inline-flex gap-1">
+                          <button type="button" className={buttonClass} onClick={() => setEditing({ id: o.order_id, qty: String(o.quantity - o.filled), price: (o.price_cents / 100).toFixed(2), remaining: o.quantity - o.filled, cents: o.price_cents })}>Amend</button>
+                          <button type="button" className={buttonClass} onClick={() => void cancel(o.order_id)}>Cancel</button>
+                        </span>
                       )}
                     </td>
                   </tr>

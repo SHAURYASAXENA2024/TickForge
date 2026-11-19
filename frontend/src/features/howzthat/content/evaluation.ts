@@ -134,7 +134,7 @@ export const LIMITATIONS = [
   "The server uses the std::map book; the faster dense-array book only accepts a fixed price range.",
   "Latency percentiles are power-of-two bucket bounds; no p99.9 / p99.99.",
   "Built but not the default, because they measured slower or no better here: core pinning, io_uring, the elastic dual ring, leader to follower replication (asynchronous, localhost only, no automatic failover).",
-  "Not built: eBPF/XDP, memory pools, huge pages, FIX/SBE message encoding.",
+  "Not built: memory pools, huge pages, FIX/SBE message encoding.",
   "The virtual traders use paper money, and resting orders do not reserve cash or shares.",
   "The engine has only been built and tested on Linux (WSL2).",
   "The research pages are drafts until a teammate who has read each paper signs them off.",

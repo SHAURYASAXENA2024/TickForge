@@ -204,6 +204,10 @@ class EngineClient:
     async def cancel(self, order_id: int) -> int:
         return await self._call({"type": "cancel", "order_id": order_id})
 
+    async def amend(self, order_id: int, qty: int) -> int:
+        """Lower the remaining quantity of a resting order. It keeps its place in the queue."""
+        return await self._call({"type": "amend", "order_id": order_id, "qty": qty})
+
     async def command(self, name: str, **args) -> dict:
         """Ask for `book`, `stats` or `state_hash` and wait for the reply."""
         key = ("book", args.get("symbol_id")) if name == "book" else (name,)

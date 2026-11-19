@@ -1,7 +1,56 @@
 // The "Exchange" section: the 24 virtual traders and the trades they made (cash and shares come from real fills).
 import { Notice, Panel } from "@/components/ui";
 import { DASH, dollars, fmtInt, fmtReservedShares, signedDollars } from "@/lib/format";
-import type { ExchangeHealth, LiveTrade, Trader } from "@/lib/exchangeApi";
+import { useCallback, useEffect, useState } from "react";
+import { EXCHANGE_SYMBOLS, controlSymbol, controlTrader, getSymbolStates, type ControlAction, type ControlState, type ExchangeHealth, type LiveTrade, type Trader } from "@/lib/exchangeApi";
+import { buttonClass } from "@/components/ui";
+
+const STATE_TEXT: Record<ControlState, string> = { running: "Running", paused: "Paused", stopped: "Stopped" };
+const STATE_COLOR: Record<ControlState, string> = { running: "text-up", paused: "text-warn", stopped: "text-down" };
+
+function Controls({ state, onAct, label }: { state: ControlState; onAct: (a: ControlAction) => void; label: string }) {
+  return (
+    <span className="inline-flex gap-1">
+      {state === "running" ? (
+        <button type="button" className={buttonClass} aria-label={`Pause ${label}`} onClick={() => onAct("pause")}>Pause</button>
+      ) : (
+        <button type="button" className={buttonClass} aria-label={`Resume ${label}`} onClick={() => onAct("resume")}>Resume</button>
+      )}
+      {state !== "stopped" && <button type="button" className={buttonClass} aria-label={`Stop ${label}`} onClick={() => onAct("stop")}>Stop</button>}
+    </span>
+  );
+}
+
+/** One chip per symbol. Pausing a symbol blocks new orders for it; stopping also cancels its resting orders. */
+function SymbolControls({ online }: { online: boolean }) {
+  const [states, setStates] = useState<Record<string, ControlState>>({});
+  const load = useCallback(() => getSymbolStates().then((rows) => setStates(Object.fromEntries(rows.map((r) => [r.symbol, r.state])))).catch(() => undefined), []);
+  useEffect(() => {
+    void load();
+    const timer = window.setInterval(() => void load(), 3000);
+    return () => window.clearInterval(timer);
+  }, [load]);
+  const act = (symbol: string, action: ControlAction) => void controlSymbol(symbol, action).catch(() => undefined).then(load);
+  return (
+    <Panel title="Symbols" description="Pause, resume or stop one symbol while the others keep trading. A paused symbol takes no new orders (from anyone); stopping also cancels its resting orders.">
+      {!online ? (
+        <Notice title="Controls not available">exchange-api is not reachable.</Notice>
+      ) : (
+        <ul className="grid gap-2 p-4 sm:grid-cols-2 lg:grid-cols-5">
+          {EXCHANGE_SYMBOLS.map((s) => {
+            const state = states[s] ?? "running";
+            return (
+              <li key={s} className="flex flex-wrap items-center justify-between gap-2 rounded border border-line px-3 py-2">
+                <span><span className="font-mono text-strong">{s}</span> <span className={`text-xs ${STATE_COLOR[state]}`}>{STATE_TEXT[state]}</span></span>
+                <Controls state={state} label={s} onAct={(a) => act(s, a)} />
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </Panel>
+  );
+}
 
 type Props = { online: boolean; health: ExchangeHealth | null; traders: Trader[]; trades: LiveTrade[] };
 
@@ -17,7 +66,7 @@ function TradersPanel({ online, traders }: { online: boolean; traders: Trader[] 
         <Notice title="No trader data">{online ? "Waiting for the first update." : "exchange-api is not reachable. Start the stack with ./build.sh."}</Notice>
       ) : (
         <div className="max-h-[28rem] overflow-auto">
-          <table className="w-full min-w-[46rem] text-sm">
+          <table className="w-full min-w-[58rem] text-sm">
             <thead className="sticky top-0 bg-surface text-xs text-muted">
               <tr className="border-b border-line">
                 <th className="px-4 py-2 text-left font-medium">Trader</th>
@@ -28,6 +77,7 @@ function TradersPanel({ online, traders }: { online: boolean; traders: Trader[] 
                 <th className="px-3 py-2 text-right font-medium">Realized profit</th>
                 <th className="px-3 py-2 text-right font-medium">Fills</th>
                 <th className="px-4 py-2 text-left font-medium">Last order</th>
+                <th className="px-3 py-2 text-left font-medium">Control</th>
               </tr>
             </thead>
             <tbody>
@@ -41,6 +91,10 @@ function TradersPanel({ online, traders }: { online: boolean; traders: Trader[] 
                   <td className={`px-3 py-1.5 text-right font-mono ${t.realized_pnl > 0 ? "text-up" : t.realized_pnl < 0 ? "text-down" : "text-muted"}`}>{signedDollars(t.realized_pnl)}</td>
                   <td className="px-3 py-1.5 text-right font-mono">{t.trades}</td>
                   <td className="max-w-48 truncate px-4 py-1.5 font-mono text-muted">{t.last_action || DASH}</td>
+                  <td className="px-3 py-1.5">
+                    <span className={`mr-2 text-xs ${STATE_COLOR[t.state ?? "running"]}`}>{STATE_TEXT[t.state ?? "running"]}</span>
+                    <Controls state={t.state ?? "running"} label={t.name} onAct={(a) => void controlTrader(t.trader_id, a).catch(() => undefined)} />
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -101,6 +155,7 @@ export function ExchangeSection({ online, health, traders, trades }: Props) {
           {health && <> · engine {health.engine} · {fmtInt(health.trades)} trades saved</>}
         </p>
       </div>
+      <SymbolControls online={online} />
       <TradersPanel online={online} traders={traders} />
       <TradeFeed online={online} trades={trades} traders={traders} />
     </section>

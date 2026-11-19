@@ -31,7 +31,11 @@ export type Trader = {
   equity: number; // cents, at the last trade prices
   trades: number;
   last_action: string;
+  state?: ControlState; // "running" unless this trader was paused or stopped
 };
+
+export type ControlState = "running" | "paused" | "stopped";
+export type ControlAction = "pause" | "resume" | "stop";
 
 /** The manual trader behind the order ticket. */
 export const MANUAL_TRADER_ID = 25;
@@ -250,3 +254,23 @@ export type Activity = {
 };
 export const getActivity = (traderId: number, symbol: string) =>
   exchangeFetch<Activity>(`/traders/${traderId}/activity?symbol=${encodeURIComponent(symbol)}`);
+
+async function post(path: string, method: string, body: unknown): Promise<Response> {
+  const res = await fetch(`${EXCHANGE_URL}${path}`, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (res.status === 409) throw new OrderRejected(((await res.json()) as { detail?: { reason?: string } }).detail?.reason ?? "rejected");
+  if (!res.ok) throw new Error(`exchange-api ${res.status}`);
+  return res;
+}
+
+/** Pause, resume or stop one virtual trader. The others keep trading. */
+export const controlTrader = (traderId: number, action: ControlAction) => post(`/traders/${traderId}/control`, "POST", { action });
+/** Pause, resume or stop one symbol: nobody can place new orders for it until it is resumed. */
+export const controlSymbol = (symbol: string, action: ControlAction) => post(`/symbols/${symbol}/control`, "POST", { action });
+export const getSymbolStates = async () =>
+  (await exchangeFetch<{ symbols: { symbol: string; id: number; state: ControlState }[] }>("/symbols")).symbols;
+
+/** Change a resting order. A lower quantity at the same price keeps its place in the queue; anything else
+ *  is a cancel plus a new order (new id, back of the queue). `qty` is the new remaining quantity. */
+export async function amendOrder(orderId: number, change: { price?: number; qty?: number }): Promise<{ order_id: number; keeps_priority: boolean }> {
+  return (await post(`/orders/${orderId}`, "PATCH", change)).json();
+}

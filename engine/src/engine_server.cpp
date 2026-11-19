@@ -74,7 +74,7 @@ static void on_signal(int) { g_stop.store(true); }
 
 // One unit of work for the matching thread.
 struct Job {
-  enum Kind : uint8_t { NewOrder, Cancel, BookCmd, StatsCmd, HashCmd, AccountsCmd, Reset, Reference, ReferenceCmd };
+  enum Kind : uint8_t { NewOrder, Cancel, BookCmd, StatsCmd, HashCmd, AccountsCmd, Reset, Reference, ReferenceCmd, Amend };
   Kind kind = NewOrder;
   uint32_t conn_id = 0; // who gets the reply
   int64_t client_ref = 0;
@@ -355,6 +355,7 @@ private:
 
     if (type == "new_order") on_new_order(c, m, ref);
     else if (type == "cancel") on_cancel(c, m, ref);
+    else if (type == "amend") on_amend(c, m, ref);
     else if (type == "command") on_command(c, m, ref);
     else if (type == "reset_accounts") on_reset(c, m, ref);
     else if (type == "set_reference") on_reference(c, m, ref);
@@ -477,6 +478,43 @@ private:
 
     // The matching thread sends the ack (or "unknown_order" if the order was
     // already filled), because only it knows what is on the book.
+    c.produced->fetch_add(1, std::memory_order_relaxed);
+    push(job);
+  }
+
+  // Lower the remaining quantity of a resting order, keeping its place in the queue. Logged like a
+  // cancel. (A price change or a bigger quantity is a cancel plus a new order, done by the client.)
+  void on_amend(Conn &c, const JsonObject &m, int64_t ref) {
+    if (following()) {
+      send_line(c, reject_json(ref, "read_only"));
+      return;
+    }
+    int64_t order_id, qty;
+    if (!get_int(m, "order_id", order_id) || !get_int(m, "qty", qty) || qty <= 0 || qty > opt_.max_qty) {
+      send_line(c, reject_json(ref, "bad_request"));
+      return;
+    }
+    std::lock_guard<std::mutex> g(ingress_mu_);
+    if (order_id < 1 || static_cast<uint64_t>(order_id) > seq_) {
+      send_line(c, reject_json(ref, "unknown_order"));
+      return;
+    }
+    Job job;
+    job.kind = Job::Amend;
+    job.conn_id = c.id;
+    job.client_ref = ref;
+    job.order.seq = ++seq_;
+    job.order.qty = static_cast<uint32_t>(qty);
+    job.cancel_id = static_cast<uint64_t>(order_id);
+
+    WalRecord rec;
+    rec.type = WalRecord::Amend;
+    rec.seq = job.order.seq;
+    rec.ts_ms = now_ms();
+    rec.order_id = job.cancel_id;
+    rec.qty = job.order.qty;
+    write_wal(rec);
+
     c.produced->fetch_add(1, std::memory_order_relaxed);
     push(job);
   }
@@ -617,7 +655,7 @@ private:
 
   void push(Job &job) {
     job.pushed_ns = now_ns();
-    if (job.kind == Job::NewOrder || job.kind == Job::Cancel || job.kind == Job::Reset || job.kind == Job::Reference)
+    if (job.kind == Job::NewOrder || job.kind == Job::Cancel || job.kind == Job::Amend || job.kind == Job::Reset || job.kind == Job::Reference)
       submitted_.fetch_add(1, std::memory_order_relaxed);
     if (ring_) ring_->enqueue(job);
     else queue_.enqueue(job);
@@ -844,6 +882,11 @@ private:
     } else if (rec.type == WalRecord::Reference) {
       job.kind = Job::Reference;
       job.order = to_order(rec);
+    } else if (rec.type == WalRecord::Amend) {
+      job.kind = Job::Amend;
+      job.order.seq = rec.seq;
+      job.order.qty = rec.qty;
+      job.cancel_id = rec.order_id;
     } else if (rec.type == WalRecord::Reset) {
       job.kind = Job::Reset;
       job.order.seq = rec.seq;
@@ -897,6 +940,14 @@ private:
       finish(job);
       reply_to(job.conn_id, found ? ack_json(job.client_ref, job.cancel_id, job.order.seq)
                                   : reject_json(job.client_ref, "unknown_order"));
+      break;
+    }
+    case Job::Amend: {
+      auto result = ex_.amend_qty(job.order.seq, job.cancel_id, job.order.qty);
+      finish(job);
+      using R = Exchange<MapBook>::Amend;
+      reply_to(job.conn_id, result == R::Done ? ack_json(job.client_ref, job.cancel_id, job.order.seq)
+                                              : reject_json(job.client_ref, result == R::Unknown ? "unknown_order" : "bad_request"));
       break;
     }
     case Job::Reference:

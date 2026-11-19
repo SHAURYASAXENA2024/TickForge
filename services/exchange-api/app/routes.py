@@ -117,6 +117,28 @@ async def delete_stop(stop_id: int, request: Request):
     return {"stop_id": stop_id}
 
 
+class AmendIn(BaseModel):
+    price: int | None = None  # cents: a new price loses the order's place in the queue
+    qty: int | None = None  # the new remaining quantity: lower keeps the place, higher loses it
+
+
+@router.patch("/orders/{order_id}")
+async def patch_order(order_id: int, body: AmendIn, request: Request):
+    """Amend a resting order. Same price and a lower quantity: the order keeps its priority. Any other
+    change is a cancel plus a new order with a new id (priority lost)."""
+    ex = _exchange(request)
+    if body.price is None and body.qty is None:
+        raise HTTPException(status_code=422, detail="give a price or a qty")
+    if (body.price is not None and body.price <= 0) or (body.qty is not None and body.qty <= 0):
+        raise HTTPException(status_code=422, detail="price and qty must be positive")
+    try:
+        return await ex.amend_order(order_id, body.price, body.qty)
+    except Rejected as exc:
+        raise HTTPException(status_code=409, detail={"reason": exc.reason})
+    except (EngineDown, asyncio.TimeoutError):
+        raise HTTPException(status_code=503, detail="engine not reachable")
+
+
 @router.get("/orderbook")
 async def get_orderbook(request: Request, symbol: str = DEFAULT_SYMBOL):
     return await _exchange(request).get_book(_check_symbol(symbol))
@@ -207,9 +229,37 @@ async def get_reference(request: Request):
     return _exchange(request).reference_snapshot()
 
 
+class ControlIn(BaseModel):
+    action: str  # pause, resume or stop
+
+
+def _action(body: ControlIn) -> str:
+    if body.action not in ("pause", "resume", "stop"):
+        raise HTTPException(status_code=422, detail="action must be pause, resume or stop")
+    return body.action
+
+
+@router.post("/traders/{trader_id}/control")
+async def control_trader(trader_id: int, body: ControlIn, request: Request):
+    """Pause, resume or stop one virtual trader. The others keep trading."""
+    ex = _exchange(request)
+    if not 1 <= trader_id < MANUAL_ID:
+        raise HTTPException(status_code=404, detail="no such virtual trader")
+    return {"trader_id": trader_id, "state": await ex.control("trader", trader_id, _action(body))}
+
+
+@router.post("/symbols/{symbol}/control")
+async def control_symbol(symbol: str, body: ControlIn, request: Request):
+    """Pause, resume or stop one symbol: no new orders for it from anyone until resumed."""
+    ex = _exchange(request)
+    _check_symbol(symbol)
+    return {"symbol": symbol, "state": await ex.control("symbol", symbol, _action(body))}
+
+
 @router.get("/symbols")
-async def get_symbols():
-    return {"symbols": [{"symbol": s, "id": SYMBOL_IDS[s]} for s in ALL_SYMBOLS]}
+async def get_symbols(request: Request):
+    states = _exchange(request).symbol_state
+    return {"symbols": [{"symbol": s, "id": SYMBOL_IDS[s], "state": states.get(s, "running")} for s in ALL_SYMBOLS]}
 
 
 # ---- WebSockets -----------------------------------------------------------------------------------

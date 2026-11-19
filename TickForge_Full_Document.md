@@ -104,12 +104,6 @@ Elastic dual-ring ingestion
 Fixed ring overflow in bursts
 A fast ring for normal flow plus an overflow segmented buffer, with
 depth monitoring and non-blocking handoff
-9
-eBPF/XDP ingestion
-(advanced)
-Kernel network stack overhead
-An XDP program filters order packets early and delivers them toward
-user space with less overhead (AF_XDP)
 10
 io_uring with O_DIRECT
 compaction (advanced)
@@ -259,10 +253,6 @@ Optional reading on log-based replication,
 if you extend to multiple nodes
 Kernel network
 bypass
-Høiland-Jørgensen et al. (2018). The eXpress Data Path: Fast
-Programmable Packet Processing in the Operating System Kernel.
-CoNEXT. https://dl.acm.org/doi/10.1145/3281411.3281443
-Foundation for the XDP ingestion idea
 Asynchronous I/O
 Axboe (2019). Efficient IO with io_uring. https://kernel.dk/io_uring.pdf
 Design of io_uring for asynchronous disk
@@ -342,7 +332,7 @@ Core pinning, then inline risk checks.
 7
 Behavioral UI features.
 8
-Advanced: elastic dual ring, io_uring, XDP.
+Advanced: elastic dual ring, io_uring.
 7. Added Differentiators (Round 2)
 Five more features, each written as: current problem, how TickForge solves it, and the research behind it.
 15. Cache-line padding (false sharing elimination)
@@ -466,10 +456,6 @@ and Odean 2000
 Queue overflow in bursts
 Elastic dual-ring ingestion
 Michael and Scott 1996; Disruptor
-9
-Kernel network stack overhead
-eBPF/XDP (AF_XDP) ingestion
-Hoiland-Jorgensen et al. 2018 (XDP)
 10
 Page-cache copies and blocking I/O in
 compaction
@@ -523,7 +509,6 @@ Zhou and Ross 2002; Polychroniou et al.
 <!-- Page 6 -->
 
 1
-Network layer: eBPF/XDP ingestion (AF_XDP) to cut kernel network overhead.
 2
 Threading: busy-spin polling, core pinning and cache-line padding.
 3

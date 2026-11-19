@@ -93,6 +93,21 @@ int main(int argc, char **argv) {
   CHECK(reason_of(a.request("{\"type\":\"cancel\",\"client_ref\":23,\"order_id\":999999}", 23)) ==
         "unknown_order");
 
+  // amend: the quantity can only go down, the order keeps its place, unknown orders are refused
+  r = a.request(order_json(30, 1, "BUY", 9400, 50), 30);
+  int64_t am_id = 0;
+  CHECK(get_int(r, "order_id", am_id));
+  auto amend = [&](int ref, int64_t id, int q) {
+    return "{\"type\":\"amend\",\"client_ref\":" + std::to_string(ref) + ",\"order_id\":" + std::to_string(id) +
+           ",\"qty\":" + std::to_string(q) + "}";
+  };
+  CHECK(reason_of(a.request(amend(31, am_id, 20), 31)) == "(ack)");
+  CHECK(reason_of(a.request(amend(32, am_id, 20), 32)) == "bad_request");   // not lower
+  CHECK(reason_of(a.request(amend(33, am_id, 90), 33)) == "bad_request");   // higher: cancel and re-enter instead
+  CHECK(reason_of(a.request(amend(34, 999999, 5), 34)) == "unknown_order");
+  CHECK(reason_of(a.request(amend(35, am_id, 0), 35)) == "bad_request");
+  CHECK(reason_of(a.request("{\"type\":\"cancel\",\"client_ref\":36,\"order_id\":" + std::to_string(am_id) + "}", 36)) == "(ack)");
+
   // a few hundred random orders for a richer book
   std::mt19937 rng(7);
   for (int i = 0; i < 300; i++) {

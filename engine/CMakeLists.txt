@@ -33,6 +33,10 @@ target_link_libraries(accounts_test PRIVATE tickforge_wal)
 add_test(NAME accounts_test COMMAND accounts_test)
 
 # Reference prices: the band, clearing stale orders, and a kill -9 in the middle.
+add_executable(amend_test tests/amend_test.cpp)
+target_link_libraries(amend_test PRIVATE tickforge_wal)
+add_test(NAME amend_test COMMAND amend_test)
+
 add_executable(reference_test tests/reference_test.cpp)
 target_link_libraries(reference_test PRIVATE tickforge_wal)
 add_test(NAME reference_test COMMAND reference_test $<TARGET_FILE:engine_server>)
