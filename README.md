@@ -48,10 +48,10 @@ Prices are integer cents everywhere except the screen. See [docs/ARCHITECTURE.md
 |---|---|---|
 | exchange-api: real buyer and seller per fill, integer-cent cash and P&L, live book, trade persistence, reconnect, REST and WebSockets | built, verified against a fake engine | `services/exchange-api/tests` (17 tests) |
 | market-data: cached, timeouts on every Yahoo call, Journey analytics | built, verified (no network in tests) | `services/market-data/tests` (19 tests) |
-| Frontend: dashboard with live engine data, order ticket, market data, Journey, *How'z that!* | built, verified | typecheck, `vite build`, 26 tests: telemetry parser, cent formatting, behavioural calculations, page smoke test |
+| Frontend: dashboard with live engine data, order ticket, market data, Journey, *How'z that!* | built, verified | typecheck, `vite build`, 32 tests: telemetry parser, cent formatting, behavioural calculations, page smoke test |
 | Behavioural features: daily vs long-term window, volatility-scaled axis, scenario preview before an order, return next to worst fall | built | calculations unit-tested; see below |
 | `build.sh` | built, verified | `./build.sh test` passes all suites; the full stack was started with the real engine and database, and an order placed through the API matched in the engine, was attributed to the right two traders and appeared in the stored history |
-| C++ engine: TCP server, price-time matching, cancel, risk checks, integer cents | built, verified | `ctest` (19 tests, also covering the optional features below) incl. an end-to-end test over TCP |
+| C++ engine: TCP server, price-time matching, cancel, risk checks, integer cents | built, verified | `ctest` (27 tests, also covering the optional features below) incl. an end-to-end test over TCP |
 | Order tracking: orders table, names on fills, Kapinza, self-trade prevention, My orders panel | built, verified | `order_book_tests` (self-trade cases), `storage/tests/test_python.py` (orders and names survive a reopen), `services/exchange-api/tests/test_exchange.py` (status, fill links, counterparties), kill -9 check with owned orders |
 | Real reference prices (Yahoo via market-data, snapshot fallback; trades stay simulated) | built, verified | `reference_test` (band from reference, stale levels cleared, kill -9 keeps it, also under TSan and ASan), `test_reference.py` (seeding, refresh, offline, partial reads, quotes within 2%) |
 | Cash and share reservation (engine accounts, `--accounts`) | built, verified | `accounts_test` (lock, release, price improvement, partial fill, rejection, exact WAL replay, conservation), accounts crash test under ThreadSanitizer and AddressSanitizer, `./build.sh kill9 --accounts` (balances and locks identical after kill -9), `test_real_engine.py` (real engine and database through the API) |
@@ -66,7 +66,10 @@ Prices are integer cents everywhere except the screen. See [docs/ARCHITECTURE.md
 | io_uring for storage (off by default: `--wal-io uring` for the engine WAL, `TICKFORGE_DB_IO=uring` for SSTables and compaction) | built, verified, not the default | `engine/tests/uring_wal_test.cpp`, `storage/tests/uring_test.rs`: identical bytes, recovery, `kill -9`. Slower on this machine, see `docs/BENCHMARKS.md`, so the normal path stays |
 | Leader to follower WAL shipping (off by default: `--replicate` on the leader, `--follow HOST:PORT` on the follower) | built, verified, on localhost | `engine/tests/replication_test.cpp`: real processes, both nodes end with the same state hash and a byte-identical WAL, `kill -9` on either node, also under ThreadSanitizer and AddressSanitizer. Asynchronous, and there is no automatic failover |
 | Fsync or group commit for the WAL, per-table id index in the database | planned | |
-| Journey "MAX" range (since listing) | planned: the dashboard code exists, the market-data side does not | |
+| Journey ranges 1D, 1M, 6M, 1Y and MAX (whole listing, weekly or monthly bars, with splits and dividends) | built, verified | `services/market-data/tests/test_journey.py` (hand-computed since-listing numbers, every range), a real MAX reply parsed by the frontend tests |
+| Trading activity (FIFO lots, realized and unrealized P&L, win rate) for Kapinza or any virtual trader | built, verified | `services/exchange-api/tests/test_ledger.py` (hand-computed), `/traders/{id}/activity` test |
+| Round robin dispatch, stop and stop-limit orders (exchange-api; stops are in memory only, API only) | built, verified | `services/exchange-api/tests/test_scheduling.py`; see the scheduling audit in `docs/DECISIONS.md` |
+| Per-trader and per-symbol pause, resume, stop; cancel; amend (lower quantity keeps priority); manual orders first at dispatch | built, verified | `engine/tests/amend_test.cpp`, `engine_e2e_test` (also under TSan and ASan), `./build.sh kill9` with amends mixed in, `tests/test_control.py` |
 | Dashboard progress against a benchmark index (feature 14, second half) | planned | |
 
 ### Behavioural features
@@ -86,7 +89,7 @@ Defaults work out of the box. See [.env.example](frontend/.env.example) for the 
 
 ```
 build.sh                  build, test, benchmark, run
-docs/                     ARCHITECTURE, CONTRACTS, DECISIONS, BENCHMARKS
+docs/                     ARCHITECTURE, CONTRACTS, DECISIONS, BENCHMARKS, DATA_SOURCES, PROGRESS
 engine/                   C++ matching engine, WAL, tests, benchmarks
 storage/                  Rust database tickforge_db (PyO3 + maturin)
 services/exchange-api/    FastAPI: engine client, traders, database, REST + WebSockets

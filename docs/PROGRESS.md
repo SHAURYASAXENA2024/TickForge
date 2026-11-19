@@ -28,6 +28,7 @@ Machine: 12th Gen Intel i5-12450H, 12 logical cores, 7.6 GiB, WSL2 Ubuntu (kerne
 | P6 scheduling audit | about 20 | done | FIFO proven by existing engine tests; round robin and stop/stop-limit added with 5 tests in test_scheduling.py; findings in DECISIONS.md |
 | P7 control without stopping everything | about 90 | done | ctest 27 of 27 incl. amend_test and the e2e amend case under TSan and ASan, kill9 with amends mixed in: hash 69a6a28ee55e622b, and --accounts hash 64eae4cd2a5feecb, both identical after restart; exchange-api 58 passed; frontend typecheck clean; bench no regression (book 8.41 M ops/s, paced RTT P50 125 us, saturated 16295 orders/s vs baseline 7.65, 134, 13982) |
 | P8 no dead UI | about 40 | done | Every panel traced to a source in docs/DATA_SOURCES.md; stale How'z that capability and roadmap text brought up to date; headless Chromium (Playwright, system libs unpacked locally without sudo) at 640 px width (= 200 percent zoom) in dark and light: found and fixed one horizontal overflow (hidden table header cell in My orders), now 0 px in both; page scan found no NaN, undefined or null and no console errors; every remaining dash has a hover explanation; frontend 32 passed |
+| P9 final cleanup | about 35 | done | AF_XDP removed from the Status page (the card had nothing else, so it is gone), README, docs, roadmap and the design document, and the probe file deleted; README and docs/CONTRACTS.md agree with the code; path sweep and file attribution check print nothing (see DECISIONS.md for five commit trailers that cannot be rewritten); fresh clone in a folder with spaces and parentheses built and ran, Kapinza order seen in UI data, DB and ledger, stack stopped with SIGTERM |
 
 ## Baseline benchmarks (unmodified engine, , full numbers in docs/BENCHMARKS.md)
 
@@ -45,3 +46,4 @@ Same machine as above. Run on 2026-11-18 from commit 0436b3d.
 
 Regression gate: no more than 10 percent worse than these on the same machine. Saturated runs vary
 by about 10 percent from run to run on this laptop, so a borderline result is repeated before it counts.
+ROUND2_ALL_DONE
