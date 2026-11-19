@@ -4,10 +4,10 @@ import { getJourney, StockApiError, type JourneyData, type JourneyEvent, type Jo
 
 const RANGES: { id: JourneyRange; label: string }[] = [
   { id: "1d", label: "1D" },
-  { id: "5d", label: "5D" },
   { id: "1mo", label: "1M" },
   { id: "6mo", label: "6M" },
   { id: "1y", label: "1Y" },
+  { id: "max", label: "MAX" },
 ];
 
 const KIND_STYLE: Record<JourneyEvent["kind"], { dot: string; tag: string; name: string }> = {
@@ -417,7 +417,7 @@ function Journey({ symbol }: { symbol: string }) {
     };
 
     load();
-    const poll = range === "1d" || range === "5d" ? window.setInterval(load, 60_000) : undefined;
+    const poll = range === "1d" ? window.setInterval(load, 60_000) : undefined;
     return () => {
       controller?.abort();
       if (poll !== undefined) window.clearInterval(poll);

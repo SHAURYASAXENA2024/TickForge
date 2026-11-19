@@ -108,6 +108,7 @@ def compute_journey(
     year_high: float | None = None,
     year_low: float | None = None,
     symbol: str = "",
+    actions: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     df = df[["Open", "High", "Low", "Close", "Volume"]].copy()
     df = df.dropna(subset=["Open", "High", "Low", "Close"])
@@ -246,7 +247,7 @@ def compute_journey(
         for i in range(n)
     ]
 
-    return {
+    result = {
         "symbol": symbol,
         "range": range_,
         "interval": interval,
@@ -277,4 +278,113 @@ def compute_journey(
         "history": history,
         "storyMethod": STORY_METHOD,
         "dataNote": DATA_NOTE,
+    }
+    if range_ == "max":
+        result["longTerm"] = compute_long_term(df, interval, currency, actions)
+    return result
+
+
+# ---- "since listing" block, only for range=max ------------------------------------------------------
+DRAWDOWN_MIN_PERCENT = 20.0
+MAX_DRAWDOWNS = 5
+
+
+def compute_long_term(df: pd.DataFrame, interval: str, currency: str = "USD", actions: pd.DataFrame | None = None) -> dict[str, Any]:
+    """Whole-listing summary from weekly or monthly bars. `actions` has optional columns
+    "Dividends" and "Stock Splits" indexed by date (what yfinance calls Ticker.actions)."""
+    df = df.dropna(subset=["Open", "High", "Low", "Close"])
+    df = df[df["Close"] > 0]
+    idx = list(df.index)
+    opens, highs = [float(v) for v in df["Open"]], [float(v) for v in df["High"]]
+    lows, closes = [float(v) for v in df["Low"]], [float(v) for v in df["Close"]]
+    n = len(closes)
+
+    def stamp(i: int) -> dict[str, str]:
+        return {"time": idx[i].isoformat(), "label": _label(idx[i], False)}
+
+    def point(i: int, price: float) -> dict[str, Any]:
+        return {"price": round(price, 4), **stamp(i)}
+
+    m = lambda v: _money(v, currency)  # noqa: E731
+    first, last = opens[0], closes[-1]
+    years = max((idx[-1] - idx[0]).days / 365.25, 0.0)
+    cagr = ((last / first) ** (1 / years) - 1) * 100 if years >= 1 else None
+    hi_i, lo_i = max(range(n), key=lambda i: highs[i]), min(range(n), key=lambda i: lows[i])
+
+    # calendar years: close of the year against the close of the year before (the first year starts at the first open)
+    year_rows: list[dict[str, Any]] = []
+    by_year: dict[int, list[int]] = {}
+    for i, ts in enumerate(idx):
+        by_year.setdefault(ts.year, []).append(i)
+    base = first
+    for year, members in sorted(by_year.items()):
+        end = closes[members[-1]]
+        partial = (year == idx[0].year and idx[members[0]].day_of_year > 7) or (year == idx[-1].year and idx[members[-1]].day_of_year < 357)
+        year_rows.append({"year": year, "percent": round(_pct(base, end), 4), "partial": bool(partial)})
+        base = end
+    full = [y for y in year_rows if not y["partial"]]
+    best = max(full, key=lambda y: y["percent"]) if full else None
+    worst = min(full, key=lambda y: y["percent"]) if full else None
+
+    # falls of 20 percent or more, from a peak until the close is back at that peak
+    episodes: list[dict[str, Any]] = []
+    peak_i, trough_i = 0, 0
+    for i in range(1, n):
+        if closes[i] >= closes[peak_i]:
+            if trough_i != peak_i:
+                episodes.append({"peak": peak_i, "trough": trough_i, "rec": i})
+            peak_i = trough_i = i
+        elif closes[i] < closes[trough_i] or trough_i == peak_i:
+            trough_i = i
+    if trough_i != peak_i:
+        episodes.append({"peak": peak_i, "trough": trough_i, "rec": None})
+    deep = [e for e in episodes if _pct(closes[e["peak"]], closes[e["trough"]]) <= -DRAWDOWN_MIN_PERCENT]
+    deep = sorted(sorted(deep, key=lambda e: _pct(closes[e["peak"]], closes[e["trough"]]))[:MAX_DRAWDOWNS], key=lambda e: e["peak"])
+    drawdowns = [{
+        "percent": round(_pct(closes[e["peak"]], closes[e["trough"]]), 4),
+        "start": point(e["peak"], closes[e["peak"]]), "bottom": point(e["trough"], closes[e["trough"]]),
+        "recovered": e["rec"] is not None, "recoveredAt": stamp(e["rec"]) if e["rec"] is not None else None,
+        "daysToBottom": (idx[e["trough"]] - idx[e["peak"]]).days,
+        "daysToRecover": (idx[e["rec"]] - idx[e["peak"]]).days if e["rec"] is not None else None,
+    } for e in deep]
+
+    splits: list[dict[str, Any]] = []
+    dividends = {"count": 0, "totalPerShare": 0.0, "last": None, "byYear": []}
+    if actions is not None and not actions.empty:
+        stamps = [t.tz_convert(idx[0].tz) if idx[0].tzinfo and t.tzinfo else t for t in actions.index]
+        if "Stock Splits" in actions:
+            for t, v in zip(stamps, actions["Stock Splits"]):
+                if v and float(v) > 0 and float(v) != 1.0:
+                    j = next((k for k in range(n) if idx[k].date() >= t.date()), None)
+                    if j is None:
+                        continue
+                    ratio = float(v)
+                    text = f"{ratio:g}-for-1 split" if ratio > 1 else f"1-for-{1 / ratio:g} reverse split"
+                    splits.append({"time": t.isoformat(), "label": t.strftime("%b %d, %Y"), "barTime": idx[j].isoformat(),
+                                   "ratio": ratio, "text": f"{text} on {t.strftime('%b %d, %Y')}."})
+        if "Dividends" in actions:
+            paid = [(t, float(v)) for t, v in zip(stamps, actions["Dividends"]) if v and float(v) > 0]
+            if paid:
+                per_year: dict[int, float] = {}
+                for t, v in paid:
+                    per_year[t.year] = per_year.get(t.year, 0.0) + v
+                lt, lv = paid[-1]
+                dividends = {"count": len(paid), "totalPerShare": round(sum(v for _, v in paid), 4),
+                             "last": {"time": lt.isoformat(), "label": lt.strftime("%b %d, %Y"), "amount": round(lv, 4)},
+                             "byYear": [{"year": y, "amount": round(a, 4)} for y, a in sorted(per_year.items())]}
+
+    bar_word = "monthly" if interval == "1mo" else "weekly"
+    notes = [f"{n} {bar_word} bars from {idx[0].strftime('%b %d, %Y')} to {idx[-1].strftime('%b %d, %Y')}.",
+             "Prices are adjusted for splits and dividends, so old prices look lower than they traded at the time.",
+             f"Falls of {DRAWDOWN_MIN_PERCENT:.0f}% or more are listed, the {MAX_DRAWDOWNS} deepest at most."]
+    return {
+        "firstTraded": point(0, first), "yearsListed": round(years, 2),
+        "totalReturnPercent": round(_pct(first, last), 4),
+        "cagrPercent": round(cagr, 4) if cagr is not None else None,
+        "growthOf1000": round(1000 * last / first, 2),
+        "allTimeHigh": point(hi_i, highs[hi_i]), "allTimeLow": point(lo_i, lows[lo_i]),
+        "fromAllTimeHighPercent": round(_pct(highs[hi_i], last), 4),
+        "years": year_rows,
+        "bestYear": best, "worstYear": worst, "drawdowns": drawdowns,
+        "splits": splits, "dividends": dividends, "notes": notes,
     }

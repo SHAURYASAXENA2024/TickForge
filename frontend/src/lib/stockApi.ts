@@ -103,7 +103,7 @@ export async function getStockSnapshot(symbol: string, range: QuoteRange = "1d",
 // Journey (GET /api/stocks/{symbol}/journey?range=...)
 // ---------------------------------------------------------------------------------------------
 
-export type JourneyRange = "1d" | "5d" | "1mo" | "6mo" | "1y" | "max";
+export type JourneyRange = "1d" | "1mo" | "6mo" | "1y" | "max";
 
 export type JourneyStamp = { time: string; label: string };
 export type JourneyPoint = JourneyStamp & { price: number };

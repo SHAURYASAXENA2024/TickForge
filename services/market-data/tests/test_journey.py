@@ -207,7 +207,7 @@ def test_api_journey_ok(client):
 
 def test_api_missing_year_range_is_null(client, fake):
     fake.extras = {}
-    body = client.get("/api/stocks/AAPL/journey?range=5d").json()
+    body = client.get("/api/stocks/AAPL/journey?range=6mo").json()
     assert body["yearHigh"] is None and body["yearLow"] is None and body["currency"] == "USD"
 
 
@@ -256,3 +256,91 @@ def test_slow_provider_call_times_out(monkeypatch):
 def test_existing_quote_endpoint_still_works(client):
     r = client.get("/api/stocks/AAPL?range=1d&interval=5m")
     assert r.status_code == 200 and r.json()["symbol"] == "AAPL" and len(r.json()["history"]) == 10
+
+
+# ---- MAX: the whole listing ---------------------------------------------------------------------
+def weekly_frame(closes, start="2020-01-06", freq="W-MON"):
+    idx = pd.date_range(start, periods=len(closes), freq=freq, tz="America/New_York")
+    c = [float(x) for x in closes]
+    return pd.DataFrame({"Open": c, "High": [x + 1 for x in c], "Low": [x - 1 for x in c], "Close": c,
+                         "Volume": [100] * len(c)}, index=idx)
+
+
+def test_long_term_numbers_by_hand():
+    # 5 yearly bars Jan 2020..2024 (Jan 6 + 52 weeks apart is close enough: use month starts instead)
+    idx = pd.to_datetime(["2020-01-06", "2020-12-28", "2021-12-27", "2022-12-26", "2023-12-25"]).tz_localize("UTC")
+    c = [100.0, 150.0, 90.0, 120.0, 180.0]
+    df = pd.DataFrame({"Open": c, "High": [x + 5 for x in c], "Low": [x - 5 for x in c], "Close": c, "Volume": 1}, index=idx)
+    actions = pd.DataFrame({"Dividends": [0.0, 0.5, 0.0], "Stock Splits": [0.0, 0.0, 2.0]},
+                           index=pd.to_datetime(["2021-03-01", "2021-06-01", "2022-06-01"]).tz_localize("UTC"))
+    lt = journey.compute_long_term(df, "1wk", "USD", actions)
+    assert lt["totalReturnPercent"] == pytest.approx(80.0)            # 100 -> 180
+    assert lt["growthOf1000"] == pytest.approx(1800.0)
+    assert lt["yearsListed"] == pytest.approx(3.97, abs=0.01)
+    assert lt["cagrPercent"] == pytest.approx(((1.8) ** (1 / 3.97) - 1) * 100, abs=0.1)
+    assert lt["allTimeHigh"]["price"] == 185.0 and lt["allTimeLow"]["price"] == 85.0
+    assert lt["fromAllTimeHighPercent"] == pytest.approx((180 - 185) / 185 * 100)
+    # 2020 +50 (from the first open 100 to 150), 2021 -40, 2022 +33.33, 2023 +50
+    assert [round(y["percent"], 2) for y in lt["years"]] == [50.0, -40.0, 33.33, 50.0]
+    assert lt["worstYear"]["year"] == 2021 and lt["bestYear"]["percent"] == pytest.approx(50.0)
+    # one fall: 150 -> 90 = -40%, recovered at 180 (the first close >= 150)
+    d = lt["drawdowns"]
+    assert len(d) == 1 and d[0]["percent"] == pytest.approx(-40.0) and d[0]["recovered"] is True
+    assert d[0]["start"]["price"] == 150.0 and d[0]["bottom"]["price"] == 90.0
+    assert lt["dividends"]["count"] == 1 and lt["dividends"]["totalPerShare"] == 0.5
+    assert lt["dividends"]["byYear"] == [{"year": 2021, "amount": 0.5}]
+    assert len(lt["splits"]) == 1 and lt["splits"][0]["ratio"] == 2.0 and lt["splits"][0]["text"].startswith("2-for-1")
+    assert lt["splits"][0]["barTime"].startswith("2022-12-26")       # first bar on or after the split date
+
+
+def test_long_term_without_actions_and_short_history():
+    lt = journey.compute_long_term(weekly_frame([10, 11, 12]), "1wk")
+    assert lt["cagrPercent"] is None and lt["splits"] == [] and lt["dividends"]["count"] == 0
+    assert lt["drawdowns"] == [] and lt["bestYear"] is None
+
+
+def test_compute_journey_adds_long_term_only_for_max():
+    df = weekly_frame([100, 110, 105, 120])
+    assert "longTerm" not in journey.compute_journey(df, "1wk", "1y", symbol="T")
+    assert "longTerm" in journey.compute_journey(df, "1wk", "max", symbol="T")
+
+
+class MaxProvider:
+    def __init__(self, years):
+        self.years, self.calls = years, []
+
+    def history(self, symbol, period, interval):
+        self.calls.append((period, interval))
+        freq, per = ("W-MON", 52) if interval == "1wk" else ("MS", 12)
+        n = int(self.years * per)
+        if period == "5d":
+            return pd.DataFrame({"Close": [99.0, 104.0]}, index=pd.date_range("2026-10-13", periods=2, tz="UTC"))
+        return weekly_frame([100 + i % 50 for i in range(n)], "2000-01-03", freq)
+
+    def info(self, symbol):
+        return {"currency": "USD"}
+
+    def actions(self, symbol):
+        return pd.DataFrame()
+
+
+def test_api_max_uses_weekly_bars_for_a_short_listing_and_monthly_for_a_long_one():
+    from fastapi.testclient import TestClient
+    from app import main
+
+    original = stocks.provider
+    try:
+        for years, interval in ((10, "1wk"), (30, "1mo")):
+            stocks.set_provider(MaxProvider(years))
+            stocks.cache.clear()
+            body = TestClient(main.app).get("/api/stocks/AAPL/journey?range=max").json()
+            assert body["range"] == "max" and body["interval"] == interval and body["longTerm"]["years"]
+    finally:
+        stocks.set_provider(original)
+
+
+@pytest.mark.parametrize("rng,interval", [("1d", "5m"), ("1mo", "1d"), ("6mo", "1d"), ("1y", "1d"), ("max", "1wk")])
+def test_every_range_works_and_5d_is_gone(client, rng, interval):
+    r = client.get(f"/api/stocks/AAPL/journey?range={rng}")
+    assert r.status_code == 200 and r.json()["range"] == rng and r.json()["timeline"]
+    assert client.get("/api/stocks/AAPL/journey?range=5d").status_code == 400

@@ -200,3 +200,9 @@ Checked on this machine (WSL2, kernel 6.18) with `engine/tools/af_xdp_probe.c`, 
 - **FIFO on fills only.** Starting holdings of the virtual traders are not fills, so a sell beyond the bought shares opens a short lot that later buys close. One "trade" for win rate, best and worst is one closing fill (sum over the lots it closed).
 - **Unrealized P&L** marks open lots against the engine's last price for the symbol; shown as dash until a price exists.
 - Only the ten exchange symbols have activity; other Journey stocks show an explanation.
+
+## P5 Journey ranges
+- Ranges are 1D, 1M, 6M, 1Y and MAX; 5D is removed from market-data (the API answers 400) and the UI.
+- **MAX** asks Yahoo for the full history with weekly bars; if the listing is longer than 25 years it asks again with monthly bars (at most about 1300 weekly or 600 monthly bars). The API reply carries the "since listing" block (`longTerm`) that the UI already knew how to draw: total return, CAGR, yearly returns, falls of 20 percent or more (up to five), splits and dividends from `Ticker.actions`.
+- Prices are Yahoo's adjusted prices; the block says so in its notes. Linear and log scale and the rule-based story work for every range (MAX opens on log scale).
+- Offline tests use a fake provider only; a vitest fixture holds a real backend reply for MAX.
