@@ -20,6 +20,10 @@ class Settings:
     reference_refresh_seconds: float = 45.0  # how often live prices are read again (30 to 60)
     reference_clear_pct: int = 5  # a new reference clears resting orders this far (percent) from it
 
+    # Scheduling (see app/scheduling.py)
+    dispatch: str = "roundrobin"  # which virtual trader sends the next order: "roundrobin" or "random"
+    stop_orders: bool = True  # accept stop and stop-limit orders (POST /stops)
+
     # Knobs for tests; not read from the environment.
     traders_start_running: bool = True
     orders_per_second: float = 4.0  # virtual-trader order rate at speed 1
@@ -35,5 +39,7 @@ class Settings:
             data_dir=env.get("TICKFORGE_DATA_DIR", ".run/data"),
             memory_db=env.get("TICKFORGE_MEMORY_DB", "") == "1",
             reference_live=env.get("TICKFORGE_REFERENCE", "live") != "snapshot",
+            dispatch=env.get("TICKFORGE_DISPATCH", "roundrobin"),
+            stop_orders=env.get("TICKFORGE_STOP_ORDERS", "1") != "0",
             market_data_url=env.get("TICKFORGE_MARKET_DATA_URL", "http://127.0.0.1:8000"),
         )

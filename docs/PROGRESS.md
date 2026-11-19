@@ -25,6 +25,7 @@ Machine: 12th Gen Intel i5-12450H, 12 logical cores, 7.6 GiB, WSL2 Ubuntu (kerne
 | P3 real reference prices | about 60 | done | ctest 26 of 26 (reference_test also under TSan and ASan), exchange-api 36 passed, frontend 28 passed, kill9 --accounts hash d81d2b87eda5de0c identical, bench saturated 19102 orders/s (baseline 14221) |
 | P4 trading activity (ledger) | about 25 | done | exchange-api 42 passed 1 skipped (5 hand-computed ledger tests, endpoint test), frontend 30 passed, ctest 26 of 26, kill9 --accounts hash d81d2b87eda5de0c identical; engine untouched, no bench needed |
 | P5 Journey ranges | about 20 | done | market-data 28 passed (hand-computed long-term test, weekly vs monthly MAX, every range, 5D refused), frontend 32 passed (real MAX fixture parsed), engine untouched |
+| P6 scheduling audit | about 20 | done | FIFO proven by existing engine tests; round robin and stop/stop-limit added with 5 tests in test_scheduling.py; findings in DECISIONS.md |
 
 ## Baseline benchmarks (unmodified engine, , full numbers in docs/BENCHMARKS.md)
 
