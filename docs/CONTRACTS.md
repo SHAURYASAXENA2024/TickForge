@@ -27,6 +27,7 @@ Server: `engine_server --port 9100 --wal <file>` listens on `127.0.0.1`. Each me
 ```json
 {"type":"new_order","client_ref":17,"symbol_id":3,"side":"BUY","price":18950,"qty":100,"trader_id":25}
 {"type":"cancel","client_ref":18,"order_id":4021}
+{"type":"amend","client_ref":21,"order_id":4021,"qty":40}
 {"type":"command","name":"book","symbol_id":3,"depth":10}
 {"type":"command","name":"stats"}
 {"type":"command","name":"state_hash"}
@@ -35,6 +36,8 @@ Server: `engine_server --port 9100 --wal <file>` listens on `127.0.0.1`. Each me
 {"type":"set_reference","client_ref":20,"symbol_id":1,"price":35220,"clear_pct":5}
 {"type":"reset_accounts","client_ref":19,"from":1,"to":24}
 ```
+
+`amend` lowers the remaining quantity of a resting order to `qty` and keeps its place in the queue (time priority); the lock of what was taken off is released. `qty` must be above 0, at most the max order size and below the current remaining quantity, else `reject` with `bad_request`; an order that is not resting gives `unknown_order`. A new price or a bigger quantity is a cancel plus a new order, done by the client.
 
 `trader_id` is optional (default 0 = no owner). It is the owner of the order: it is written to the WAL with the order, it comes back as `buyer_id` / `seller_id` on every trade, and the engine never matches an order against a resting order of the same owner (see Rules). `client_ref` is any integer the client chooses. The engine echoes it in the `ack` or `reject` so the client can match replies to requests.
 
@@ -169,6 +172,7 @@ frame  = len:u32  crc:u32  payload[len]
 | new order with an owner (`type=3`) | the `type=1` layout, then `u32 trader_id` at the end |
 | reference price (`type=5`) | same as a new order (`type=1`): `symbol_id`, `price` (cents), `qty` = clear percent; side is 0 |
 | reset accounts (`type=4`) | `u8 type, u64 seq, u64 ts_ms, u64 first trader id, u32 last trader id` |
+| amend (`type=6`) | `u8 type, u64 seq, u64 ts_ms, u64 order_id, u32 new remaining qty` |
 | cancel (`type=2`) | `u8 type, u64 seq, u64 ts_ms, u64 order_id` |
 
 An order without an owner is still written as `type=1`, byte for byte as before, so older logs and logs of ownerless orders are unchanged and still replay.
@@ -237,13 +241,17 @@ REST (JSON, prices in cents):
 | `GET /health` | `{"status":"ok","engine":"connected"\|"disconnected","trades":N}` |
 | `POST /orders` | body `{trader_id, symbol, side, price, qty}` → `{order_id}` after the engine ack; 409 if rejected, with `reason`. `trader_id` is 1 to 24 (virtual traders), 25 or 0 (Kapinza, the order ticket's account) |
 | `DELETE /orders/{order_id}` | cancel |
+| `PATCH /orders/{order_id}` | body `{price?, qty?}` (`qty` = new remaining quantity). Same price and lower quantity: engine amend, keeps priority (`keeps_priority: true`). Otherwise cancel plus a new order with a new id (`kind: "replaced"`). 409 with `reason` (`not_open`, `nothing_to_change`, `price_band`, `insufficient_cash`, `insufficient_shares`, or the engine's) changes nothing |
+| `POST /traders/{id}/control`, `POST /symbols/{symbol}/control` | body `{action: "pause"\|"resume"\|"stop"}` for one virtual trader (1 to 24) or one symbol; stop also cancels resting orders; a paused symbol refuses new orders with `symbol paused` |
+| `POST /stops`, `GET /stops`, `DELETE /stops/{id}` | stop and stop-limit orders `{trader_id, symbol, side, stop_price, limit_price?, qty}`, held in memory until a trade price reaches the stop |
+| `GET /traders/{id}/activity?symbol=` | bought, sold, net position, average prices, FIFO realized and unrealized P&L, win rate, best and worst trade, computed from the fills |
 | `GET /orderbook?symbol=AAPL` | `{symbol, bids:[[price,qty]], asks:[[price,qty]]}` |
 | `GET /trades?limit=100` | newest first |
 | `GET /trades/history?start_ms=&end_ms=&symbol=` | from `tickforge_db.range` |
 | `GET /traders`, `GET /traders/{id}` | cash, `reserved_cash`, `available_cash` (cents), holdings, `reserved_shares`, realized P&L (cents), trade count. With the engine's accounts on, cash and shares are the engine's own numbers, read on every request. `/traders` has the 24 virtual traders under `traders` and Kapinza under `manual`; `/traders/25` is Kapinza |
 | `GET /orders?trader_id=&limit=` | stored orders (status, filled quantity), newest first; `trader_id=0` means Kapinza |
 | `GET /traders/{id}/fills?limit=` | that trader's fills from the database, newest first, each with `order_id` (their own order), `side` (their side), and `counterparty_id` / `counterparty_name` (who was on the other side) |
-| `GET /symbols` | the symbol list with ids |
+| `GET /symbols` | the symbol list with ids and control state |
 
 A fill moves cash and shares between **the two traders who own the two orders**. The engine names both traders on every trade (`buyer_id`, `seller_id`), so this survives a restart of the API.
 
@@ -281,7 +289,7 @@ Browser to server:
 
 ## 6. market-data (port 8000)
 
-Unchanged routes (`/api/stocks...`, `/api/stocks/{symbol}/journey?range=`). Yahoo responses are cached in memory with a timeout on every request. Tests mock the provider and never use the network.
+Routes `/api/stocks/{symbol}?range=&interval=` and `/api/stocks/{symbol}/journey?range=`. Journey ranges are `1d`, `1mo`, `6mo`, `1y` and `max` (weekly bars, monthly when the listing is over 25 years; the reply then has a `longTerm` block); `5d` is refused with 400. Yahoo responses are cached in memory with a timeout on every request. Tests mock the provider and never use the network.
 
 ## 7. Ports and paths
 
