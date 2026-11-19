@@ -23,19 +23,19 @@
  */
 :root {
   color-scheme: dark;
-  --canvas: #0b1020;
-  --canvas-end: #111c3a;
+  --canvas: #120B24;
+  --canvas-end: #1E1240;
   --canvas-gradient: linear-gradient(160deg, var(--canvas), var(--canvas-end));
-  --surface: #141f40;
-  --raised: #1c2950;
-  --line: #27345e;
-  --line-strong: #3b4b7c;
+  --surface: #261a55;
+  --raised: #30226a;
+  --line: #3d2d7a;
+  --line-strong: #54439a;
   --strong: #f2f5fc;
   --fg: #d0d8ec;
   --muted: #a3b0d0;
   --faint: #8e9cc0;
-  --accent: #22d3ee;
-  --accent-gradient: linear-gradient(90deg, #22d3ee, #8b5cf6);
+  --accent: #A78BFA;
+  --accent-gradient: linear-gradient(90deg, #A78BFA, #E879F9);
   --up: #34c98b;
   --down: #f26d78;
   --warn: #e3a83a;
@@ -56,8 +56,8 @@
     --fg: #27304a;
     --muted: #4a5470;
     --faint: #5d6885;
-    --accent: #0e7490;
-    --accent-gradient: linear-gradient(90deg, #0e7490, #6d28d9);
+    --accent: #6d28d9;
+    --accent-gradient: linear-gradient(90deg, #6d28d9, #a21caf);
     --up: #0d7a50;
     --down: #bf2f3d;
     --warn: #86570a;
@@ -78,8 +78,8 @@
   --fg: #27304a;
   --muted: #4a5470;
   --faint: #5d6885;
-  --accent: #0e7490;
-  --accent-gradient: linear-gradient(90deg, #0e7490, #6d28d9);
+  --accent: #6d28d9;
+  --accent-gradient: linear-gradient(90deg, #6d28d9, #a21caf);
   --up: #0d7a50;
   --down: #bf2f3d;
   --warn: #86570a;
