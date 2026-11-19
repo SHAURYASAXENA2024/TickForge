@@ -46,7 +46,6 @@ export function Differentiators() {
         <span>{all.length} differentiators:</span>
         <StatusPill kind="implemented" label={`${count("implemented")} implemented`} />
         <StatusPill kind="partial" label={`${count("partial")} partially implemented`} />
-        <StatusPill kind="planned" label={`${count("planned")} planned`} />
       </div>
       {DIFFERENTIATORS.map((g) => (
         <div key={g.id}>
@@ -71,11 +70,10 @@ export function Capabilities() {
   const groups: { status: Status; title: string }[] = [
     { status: "implemented", title: "Available now" },
     { status: "partial", title: "Partially implemented" },
-    { status: "planned", title: "Planned" },
   ];
   return (
-    <Section id="capabilities" lead="What a person can actually do with TickForge, and why it matters. Planned items are listed separately.">
-      <div className="grid gap-5 lg:grid-cols-3">
+    <Section id="capabilities" lead="What a person can actually do with TickForge, and why it matters.">
+      <div className="grid gap-5 lg:grid-cols-2">
         {groups.map((g) => (
           <div key={g.status}>
             <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-fg">

@@ -46,15 +46,15 @@ export const ABSTRACT =
   "TickForge is a small exchange built to study what happens on the critical path of order matching. Connection threads write each order to a write-ahead log, acknowledge it and hand it to a lock-free multi-producer / single-consumer queue; one matching thread applies price-time priority on limit order books and emits trades; the exchange-api service stores every trade in an LSM-tree database written in Rust and streams the engine's throughput, queue depth, book depth and latency histogram to a web dashboard. A separate Python service serves real stock histories from Yahoo Finance, with long-horizon analytics designed around research on how people perceive risk. Planned and not built: fsync / group commit for the log, compaction throttled by queue depth, and the kernel- and CPU-level work listed under limitations.";
 
 export const OBJECTIVE =
-  "Keep latency on the matching path predictable, make every result explainable from the code, and present risk and return in a way that helps people decide better. Every performance claim must be backed by a measurement against a baseline; the first benchmark results are in docs/BENCHMARKS.md.";
+  "Keep latency on the matching path predictable, make every result explainable from the code, and present risk and return in a way that helps people decide better. Every performance claim must be backed by a measurement against a baseline; results are in docs/BENCHMARKS.md.";
 
 export const THEMES: { title: string; text: string; status: Status }[] = [
   { title: "Concurrency", text: "Lock-free MPSC ingestion with hazard-pointer memory reclamation.", status: "implemented" },
   { title: "Market microstructure", text: "Limit order books for 30 symbols with price-time priority, cancels and risk checks, one matching thread.", status: "implemented" },
   { title: "Observability", text: "The engine's stats (orders/s, queue depth, book depth, latency histogram) are polled by exchange-api and pushed to the browser every second.", status: "implemented" },
-  { title: "Storage and recovery", text: "WAL with replay recovery and an LSM-tree trade database are built and tested. Missing: fsync / group commit, compaction throttled by queue depth, snapshots.", status: "partial" },
-  { title: "Tail latency", text: "p50 / p99 from a 16-bucket power-of-two histogram, plus a first benchmark against a mutex queue; no p99.99.", status: "partial" },
-  { title: "Behaviour-aware UX", text: "Daily / 30 days / 1 year windows, volatility-scaled axis, scenario preview before an order, return beside the worst fall. Comparison with a benchmark index is planned.", status: "partial" },
+  { title: "Storage and recovery", text: "WAL with replay recovery and an LSM-tree trade database are built and tested. The log is not fsynced.", status: "partial" },
+  { title: "Tail latency", text: "p50 / p99 from a 16-bucket power-of-two histogram, plus benchmarks against a mutex queue; no p99.99.", status: "partial" },
+  { title: "Behaviour-aware UX", text: "Daily / 30 days / 1 year windows, volatility-scaled axis, scenario preview before an order, return beside the worst fall.", status: "partial" },
 ];
 
 // ---- 02 Problem statement ----------------------------------------------------------------------------
@@ -75,12 +75,6 @@ export const SYSTEM_PROBLEMS: Problem[] = [
     status: "partial",
   },
   {
-    title: "Copying and serialization between components",
-    text: "Orders converted and copied between queue, engine and log waste CPU and pollute caches.",
-    today: "Orders are fixed-size structs, but they are copied into a heap node per enqueue, and the WAL frame is its own binary format.",
-    status: "planned",
-  },
-  {
     title: "Cache misses from pointer-heavy structures",
     text: "Tree- and list-based order books chase pointers on the hottest code path.",
     today: "A cache-aligned dense-array book exists next to the std::map book and gives the same trades; in the benchmark it ran 14.82 vs 10.12 M ops/s. The server still uses the map book.",
@@ -89,7 +83,7 @@ export const SYSTEM_PROBLEMS: Problem[] = [
   {
     title: "Flush and compaction interference",
     text: "Background merging in LSM stores causes latency spikes on the write path (the compaction wall).",
-    today: "The storage engine has one size-tiered compaction. Its effect on matching latency is not measured, and activity-aware (queue-depth) throttling is designed, not built.",
+    today: "The storage engine has one size-tiered compaction. Its effect on matching latency is not measured.",
     status: "partial",
   },
   {
@@ -122,7 +116,7 @@ export const BEHAVIOUR_PROBLEMS: Problem[] = [
   {
     title: "One-sided framing of gains or losses",
     text: "Showing only returns encourages greed; showing only losses discourages participation.",
-    today: "The window return is shown beside the worst fall in the market panel and the order ticket, and Journey shows the biggest fall beside the biggest rise. Comparison with a benchmark index is planned.",
+    today: "The window return is shown beside the worst fall in the market panel and the order ticket, and Journey shows the biggest fall beside the biggest rise.",
     status: "partial",
   },
   {
@@ -178,7 +172,7 @@ export const RESEARCH_AREAS: ResearchArea[] = [
     finding: "Gould et al. survey order books and note price-time priority is by far the most common rule; Chilimbi et al. show data layout drives cache behaviour.",
     relevance: "Defines how our book matches and what a faster layout would look like.",
     decision: "Price-time priority, trades at the resting order's price, the remainder rests; prices are integer cents; a cache-aligned dense-array book sits next to the std::map book.",
-    gap: "The server uses the map book, because the dense book only accepts a fixed price range. Limit orders only; no market orders or modifications.",
+    gap: "The server uses the map book, because the dense book only accepts a fixed price range. Limit orders only; no market orders. Cancel and amend are supported.",
     status: "implemented",
     papers: ["gould-2013-limit-order-books"],
     pdfOnly: ["Chilimbi, Davidson and Larus (1999), Cache-conscious structure definition"],
@@ -188,7 +182,7 @@ export const RESEARCH_AREAS: ResearchArea[] = [
     problem: "Write-heavy stores must turn random writes into sequential ones without stalling the writer.",
     finding: "The LSM-tree buffers writes in memory and merges sorted runs on disk; SILK studies the latency spikes compaction causes; Monkey and Dostoevsky tune filters and merge policy.",
     relevance: "The trade store, and the risk that compaction hurts matching latency.",
-    decision: "Built: a MemTable (BTreeMap), binary SSTables with a sparse index, a Bloom filter and a CRC-32 footer, and one size-tiered compaction. Planned: an atomic MemTable swap and compaction throttled by queue depth.",
+    decision: "Built: a MemTable (BTreeMap), binary SSTables with a sparse index, a Bloom filter and a CRC-32 footer, and one size-tiered compaction.",
     gap: "get_trade scans a table's data when the filter says maybe (no per-table id index); no read benchmarks; compaction's effect on latency is not measured.",
     status: "partial",
     papers: ["oneil-1996-lsm-tree", "silk-2019", "bloom-1970"],
@@ -210,7 +204,7 @@ export const RESEARCH_AREAS: ResearchArea[] = [
     problem: "After a crash, memory and storage must be brought back to exactly the same state.",
     finding: "The state-machine approach: replicas that apply the same inputs in the same order reach the same state.",
     relevance: "Our matcher is a single thread, so replaying logged inputs in order should rebuild the exact book.",
-    decision: "Sequence-numbered inputs written to a CRC-protected WAL before the ack, replay through the same matching code, and a state-hash check. Snapshots are planned.",
+    decision: "Sequence-numbered inputs written to a CRC-protected WAL before the ack, replay through the same matching code, and a state-hash check.",
     gap: "No snapshots, so recovery replays the whole log. One write() per frame survives a process kill but not a power cut (no fsync / group commit).",
     status: "partial",
     papers: ["schneider-1990-state-machine"],
@@ -222,7 +216,7 @@ export const RESEARCH_AREAS: ResearchArea[] = [
     finding: "Benartzi and Thaler link frequent evaluation with loss aversion; Kaufmann, Weber and Haisley show presentation formats change risk-taking and understanding.",
     relevance: "Shapes the Journey view and the order-page features.",
     decision: "Daily / 30 days / 1 year evaluation windows, a volatility-scaled axis, falls shown beside gains, and a scenario preview before an order.",
-    gap: "No user study; the evaluation windows apply to a stock's price history, not to a user's own P&L; no benchmark-index comparison yet.",
+    gap: "No user study; the evaluation windows apply to a stock's price history, not to a user's own P&L.",
     status: "partial",
     papers: ["benartzi-thaler-1995-myopic-loss-aversion", "kaufmann-2013-graphical-displays"],
     pdfOnly: [

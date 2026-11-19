@@ -65,12 +65,10 @@ Prices are integer cents everywhere except the screen. See [docs/ARCHITECTURE.md
 | Elastic dual ring queue (off by default, `--queue elastic`, `--ring-size N`) | built, verified, not the default | `engine/tests/elastic_ring_test.cpp` and the `kill -9` test on the real server, both under ThreadSanitizer and AddressSanitizer. Much faster than the list queue alone; no difference through the whole server, see `docs/BENCHMARKS.md` |
 | io_uring for storage (off by default: `--wal-io uring` for the engine WAL, `TICKFORGE_DB_IO=uring` for SSTables and compaction) | built, verified, not the default | `engine/tests/uring_wal_test.cpp`, `storage/tests/uring_test.rs`: identical bytes, recovery, `kill -9`. Slower on this machine, see `docs/BENCHMARKS.md`, so the normal path stays |
 | Leader to follower WAL shipping (off by default: `--replicate` on the leader, `--follow HOST:PORT` on the follower) | built, verified, on localhost | `engine/tests/replication_test.cpp`: real processes, both nodes end with the same state hash and a byte-identical WAL, `kill -9` on either node, also under ThreadSanitizer and AddressSanitizer. Asynchronous, and there is no automatic failover |
-| Fsync or group commit for the WAL, per-table id index in the database | planned | |
 | Journey ranges 1D, 1M, 6M, 1Y and MAX (whole listing, weekly or monthly bars, with splits and dividends) | built, verified | `services/market-data/tests/test_journey.py` (hand-computed since-listing numbers, every range), a real MAX reply parsed by the frontend tests |
 | Trading activity (FIFO lots, realized and unrealized P&L, win rate) for Kapinza or any virtual trader | built, verified | `services/exchange-api/tests/test_ledger.py` (hand-computed), `/traders/{id}/activity` test |
 | Round robin dispatch, stop and stop-limit orders (exchange-api; stops are in memory only, API only) | built, verified | `services/exchange-api/tests/test_scheduling.py`; see the scheduling audit in `docs/DECISIONS.md` |
 | Per-trader and per-symbol pause, resume, stop; cancel; amend (lower quantity keeps priority); manual orders first at dispatch | built, verified | `engine/tests/amend_test.cpp`, `engine_e2e_test` (also under TSan and ASan), `./build.sh kill9` with amends mixed in, `tests/test_control.py` |
-| Dashboard progress against a benchmark index (feature 14, second half) | planned | |
 
 ### Behavioural features
 

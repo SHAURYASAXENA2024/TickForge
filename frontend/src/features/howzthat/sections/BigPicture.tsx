@@ -36,7 +36,7 @@ export function MapBox({ title, sub, items, status = "implemented", className = 
   );
 }
 
-/** High-level system map: processes and how they talk. Planned parts are dashed. */
+/** High-level system map: processes and how they talk. */
 export function SystemMap() {
   return (
     <figure className="rounded-2xl border border-line bg-canvas/50 p-4">
@@ -61,7 +61,7 @@ export function SystemMap() {
         <div className="lg:col-start-4 lg:row-start-2"><Connector label="HTTP :8000" /></div>
         <MapBox
           title="Trade database · Rust"
-          sub="tickforge_db, used by exchange-api in-process; compaction throttling is planned"
+          sub="tickforge_db, used by exchange-api in-process"
           items={["MemTable", "SSTables", "Bloom filter", "compaction"]}
           status="partial"
           className="lg:col-start-1 lg:row-start-3"

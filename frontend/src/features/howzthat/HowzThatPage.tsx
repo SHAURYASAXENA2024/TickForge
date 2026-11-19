@@ -35,7 +35,7 @@ function Overview() {
         </p>
         <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-faint">
           <span>Status labels:</span>
-          {(["implemented", "partial", "planned", "unverified"] as Status[]).map((s) => (
+          {(["implemented", "partial", "unverified"] as Status[]).map((s) => (
             <StatusPill key={s} kind={s} label={STATUS_LABEL[s]} />
           ))}
         </div>

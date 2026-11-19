@@ -94,7 +94,7 @@ export function ExistingWork() {
                 <th scope="col" className="px-3 py-2.5 font-semibold">Research / prior work</th>
                 <th scope="col" className="px-3 py-2.5 font-semibold">Key idea</th>
                 <th scope="col" className="px-3 py-2.5 font-semibold">Relevance to TickForge</th>
-                <th scope="col" className="px-3 py-2.5 font-semibold">Our implementation or planned extension</th>
+                <th scope="col" className="px-3 py-2.5 font-semibold">Our implementation</th>
               </tr>
             </thead>
             <tbody>

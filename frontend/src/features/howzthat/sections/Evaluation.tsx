@@ -3,7 +3,7 @@ import { Card, Field, Section, scrollToId } from "../parts";
 import { StatusPill, linkClass } from "@/components/Prose";
 
 export const EXP_STATE: Record<Experiment["status"], { label: string; kind: "unverified" | "planned" | "partial" }> = {
-  "first-run": { label: "First run done", kind: "partial" },
+  "first-run": { label: "Measured", kind: "partial" },
   "not-measured": { label: "Not yet measured", kind: "unverified" },
   blocked: { label: "Blocked: prerequisite not built", kind: "planned" },
   optional: { label: "Optional · evaluation planned", kind: "planned" },
@@ -15,7 +15,7 @@ export function Evaluation() {
   return (
     <Section
       id="evaluation"
-      lead="How TickForge's claims should be tested, following the evaluation plan in the research document. A first benchmark run (docs/BENCHMARKS.md) filled some result cells; the others say they are not yet measured."
+      lead="How TickForge's claims should be tested, following the evaluation plan in the research document. Results come from docs/BENCHMARKS.md; cells without a number are not yet measured."
     >
       <div>
         <h3 className="mb-3 text-sm font-semibold text-fg">Evidence that exists today · tests of correctness</h3>

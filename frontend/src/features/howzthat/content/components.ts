@@ -94,18 +94,9 @@ export const COMPONENTS: Component[] = [
     status: "partial",
     files: ["engine/src/wal.cpp","engine/tests/wal_recovery_test.cpp", "storage/src/database.rs", "services/exchange-api/app/db.py"],
   },
-  {
-    id: "future",
-    name: "Storage not built yet",
-    responsibility: "fsync / group commit for the engine log, snapshots, an atomic MemTable swap, a per-table id index for get_trade, compaction throttled by queue depth, read benchmarks and a B+tree baseline benchmark.",
-    problem: "Durability across a power cut, faster recovery, and no compaction spikes on the matching path.",
-    talksTo: "—",
-    status: "planned",
-    files: [],
-  },
 ];
 
-// Architecture diagram: what runs today, and what is only designed. Labels must match COMPONENTS.
+// Architecture diagram: what runs today. Labels must match COMPONENTS.
 export type FlowNode = { label: string; detail: string; status: Status; component?: string };
 
 export const ENGINE_FLOW: FlowNode[] = [
@@ -130,6 +121,6 @@ export const STORAGE_FLOW: FlowNode[] = [
   { label: "Trades", detail: "from the matcher", status: "implemented", component: "matcher" },
   { label: "Write-ahead log", detail: "built · no fsync yet", status: "partial", component: "persistence" },
   { label: "MemTable → SSTables", detail: "Rust · tickforge_db", status: "implemented", component: "persistence" },
-  { label: "Compaction", detail: "size-tiered built · throttling planned", status: "partial", component: "persistence" },
+  { label: "Compaction", detail: "size-tiered", status: "implemented", component: "persistence" },
   { label: "Replay recovery", detail: "state hash checked", status: "implemented", component: "persistence" },
 ];
