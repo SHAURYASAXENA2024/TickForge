@@ -17,6 +17,7 @@ from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import routes
+from app.scheduling import RoundRobin, StopBook
 from app.config import Settings
 from app.db import open_db
 from app.engine_client import EngineClient, EngineDown, Rejected
@@ -48,6 +49,8 @@ class Exchange:
         self._seeded_connection = 0
         self.prices: dict[str, int] = dict(self.reference.prices)  # last trade price per symbol, cents
         self.traders = make_traders(self.prices)
+        self.round_robin = RoundRobin(self.traders)
+        self.stops = StopBook()
         self.manual = make_manual_trader(self.prices)  # Kapinza: the order ticket's account
         self._reject_seq = REJECTED_ID_BASE
         self.engine = EngineClient(settings.engine_host, settings.engine_port, settings.reconnect_seconds)
@@ -107,6 +110,7 @@ class Exchange:
             return
         price, qty = msg["price"], msg["qty"]
         self.prices[symbol] = price
+        self._fire_stops(symbol, price)
         for trader_id, side in ((msg["buyer_id"], "BUY"), (msg["seller_id"], "SELL")):
             account = self.account(trader_id)
             if account is not None:  # id 0 = an order whose owner is unknown
@@ -121,6 +125,19 @@ class Exchange:
         self._telemetry_trades.append(
             {"id": trade["trade_id"], "price": price, "qty": qty, "buy": trade["buyer_id"], "sell": trade["seller_id"]})
         self._persist_queue.put_nowait(("trade", trade))
+
+    def _fire_stops(self, symbol: str, price: int) -> None:
+        """Send the orders of the stops that this last price fires. Called from the trade callback."""
+        if not self.stops.orders:
+            return
+        for stop in self.stops.triggered(symbol, price):
+            asyncio.get_running_loop().create_task(self._release_stop(stop))
+
+    async def _release_stop(self, stop) -> None:
+        try:
+            await self.place_order(stop.trader_id, stop.symbol, stop.side, StopBook.release_price(stop), stop.qty)
+        except (EngineDown, Rejected, asyncio.TimeoutError) as exc:
+            log.info("stop %s fired but the order was not placed: %r", stop.stop_id, exc)
 
     def account(self, trader_id: int):
         """The Trader object for an id: 1..24 are virtual traders, 25 is Kapinza, 0 has none."""
@@ -206,7 +223,7 @@ class Exchange:
             await asyncio.sleep(1 / rate if rate > 0 else 1)
             if self.state != "running" or not self.engine.connected:
                 continue
-            trader = self.rng.choice(self.traders)
+            trader = self.round_robin.take() if self.settings.dispatch == "roundrobin" else self.rng.choice(self.traders)
             order = make_order(trader, self.reference.prices, self.rng)
             if order is None:
                 continue

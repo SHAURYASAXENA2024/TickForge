@@ -24,6 +24,15 @@ class OrderIn(BaseModel):
     qty: int
 
 
+class StopIn(BaseModel):
+    trader_id: int = 0
+    symbol: str
+    side: str
+    stop_price: int  # cents: the trigger, compared with the last trade price
+    limit_price: int | None = None  # cents: set for a stop-limit order, left out for a plain stop
+    qty: int
+
+
 def _exchange(request: Request):
     return request.app.state.exchange
 
@@ -72,6 +81,40 @@ async def delete_order(order_id: int, request: Request):
     except (EngineDown, asyncio.TimeoutError):
         raise HTTPException(status_code=503, detail="engine not reachable")
     return {"order_id": order_id}
+
+
+def _stop_view(stop) -> dict:
+    return {"stop_id": stop.stop_id, "trader_id": stop.trader_id, "symbol": stop.symbol, "side": stop.side,
+            "stop_price": stop.stop_price, "limit_price": stop.limit_price, "qty": stop.qty,
+            "kind": "stop_limit" if stop.limit_price is not None else "stop"}
+
+
+@router.post("/stops")
+async def post_stop(stop: StopIn, request: Request):
+    """Hold a stop or stop-limit order until the last trade price reaches `stop_price`, then send it
+    to the engine. Held in memory only (lost if exchange-api restarts); funds are reserved when it fires."""
+    ex = _exchange(request)
+    if not ex.settings.stop_orders:
+        raise HTTPException(status_code=404, detail="stop orders are switched off")
+    _check_symbol(stop.symbol)
+    if stop.side not in ("BUY", "SELL") or stop.stop_price <= 0 or stop.qty <= 0 or (stop.limit_price is not None and stop.limit_price <= 0):
+        raise HTTPException(status_code=422, detail="side must be BUY or SELL; prices and qty must be positive")
+    if not 0 <= stop.trader_id <= MANUAL_ID:
+        raise HTTPException(status_code=422, detail=f"trader_id must be 0 to {MANUAL_ID}")
+    held = ex.stops.add(stop.trader_id or MANUAL_ID, stop.symbol, stop.side, stop.stop_price, stop.limit_price, stop.qty)
+    return _stop_view(held)
+
+
+@router.get("/stops")
+async def list_stops(request: Request):
+    return {"stops": [_stop_view(s) for s in _exchange(request).stops.orders.values()]}
+
+
+@router.delete("/stops/{stop_id}")
+async def delete_stop(stop_id: int, request: Request):
+    if not _exchange(request).stops.cancel(stop_id):
+        raise HTTPException(status_code=404, detail="no such stop")
+    return {"stop_id": stop_id}
 
 
 @router.get("/orderbook")
