@@ -77,6 +77,7 @@ export default function Dashboard() {
       <main className="mx-auto max-w-[1400px] px-4 lg:px-8">
         <div className="flex flex-wrap items-center gap-3 border-b border-line py-4" role="region" aria-label="Simulation controls">
           <div className="mr-auto">
+            <h1 className="text-2xl font-semibold text-strong">Welcome back, Kapinza</h1>
             <p className="text-sm font-medium text-strong">{STATE_TEXT[live ? engineState : "closed"]}</p>
             <p className="text-sm text-muted">
               {engineUp
