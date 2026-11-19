@@ -47,3 +47,25 @@ Same machine as above. Run on 2026-11-18 from commit 0436b3d.
 Regression gate: no more than 10 percent worse than these on the same machine. Saturated runs vary
 by about 10 percent from run to run on this laptop, so a borderline result is repeated before it counts.
 ROUND2_ALL_DONE
+
+# Round 3 polish
+
+Branch `polish-round3`. Frontend and docs only; checks were frontend typecheck and vitest.
+
+## How'z that audit (checked against README, docs/DECISIONS.md, docs/BENCHMARKS.md; nothing re-run)
+
+Deleted (not built): four differentiator cards (fixed-width zero-copy pipeline, cache-line padding, object pools, contention measurement), the "Copying and serialization" problem card, the "Storage not built yet" component card, the whole roadmap list, the compaction-throttling and optional UX-study experiments, two result rows with no measurement, and every "planned" sentence in the text. The Planned legend pill, count and capability group are gone.
+Fixed (outdated): "First run done" label, "Core affinity is not implemented", test counts (27 ctest, 58 exchange-api, 28 market-data, 32 vitest), "resting orders do not reserve cash", "no modifications" (amend exists), compaction shown as implemented.
+Removed from README: the two "planned" rows. The dashboard Status section had no such items.
+
+Edited files:
+- README.md
+- docs/PROGRESS.md
+- frontend/src/features/howzthat/HowzThatPage.tsx
+- frontend/src/features/howzthat/content/{capabilities,components,differentiators,evaluation,index,overview}.ts
+- frontend/src/features/howzthat/content/roadmap.ts (deleted)
+- frontend/src/features/howzthat/sections/{BigPicture,Closing,Differentiators,Evaluation,HowItWorks,Problem}.tsx
+
+## Colour scheme "Violet night"
+
+The old values named in the task (#120B24, #A78BFA) did not exist in `frontend/src/index.css`; the dark canvas was #0b1020 to #111c3a and the accent gradient #22d3ee to #8b5cf6. The new values replace those tokens.

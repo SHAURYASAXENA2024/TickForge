@@ -1,19 +1,13 @@
-import { ACKNOWLEDGMENTS, LIMITATIONS, PDF_REFERENCES, type Problem, ROADMAP } from "../content";
-import { Card, Field, Section } from "../parts";
+import { ACKNOWLEDGMENTS, LIMITATIONS, PDF_REFERENCES, type Problem } from "../content";
+import { Card, Section } from "../parts";
 import { Eyebrow, linkClass } from "@/components/Prose";
 import { builtPapers, bySlug } from "@/features/research/Papers";
 import { citation } from "@/features/research/research";
 import { Link, researchPath } from "@/lib/router";
 
-export const STAGE: Record<"next" | "planned" | "later", { label: string; cls: string }> = {
-  next: { label: "Next", cls: "border-accent/40 text-accent" },
-  planned: { label: "Planned", cls: "border-line-strong text-fg" },
-  later: { label: "Later · advanced", cls: "border-line-strong text-muted" },
-};
-
 export function Limitations() {
   return (
-    <Section id="limitations" lead="Where TickForge stops today, and what would come next, in order. Nothing in this section is in progress in the code right now; the benchmark harness is the next step.">
+    <Section id="limitations" lead="Where TickForge stops today.">
       <Card>
         <h3 className="text-sm font-semibold text-strong">Current limitations</h3>
         <ul className="mt-2 grid gap-x-6 gap-y-1.5 text-sm text-fg md:grid-cols-2">
@@ -25,25 +19,6 @@ export function Limitations() {
           ))}
         </ul>
       </Card>
-      <ol className="space-y-2.5">
-        {ROADMAP.map((r, i) => (
-          <li key={r.title}>
-            <Card>
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="font-mono text-xs text-faint">{String(i + 1).padStart(2, "0")}</span>
-                <h3 className="text-sm font-semibold text-strong">{r.title}</h3>
-                <span className={`ml-auto rounded-full border px-2 py-0.5 text-xs font-semibold ${STAGE[r.stage].cls}`}>{STAGE[r.stage].label}</span>
-              </div>
-              <dl className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                <Field label="Problem it addresses">{r.problem}</Field>
-                <Field label="Why it matters">{r.why}</Field>
-                <Field label="Needs first">{r.needs}</Field>
-                <Field label="Done when">{r.done}</Field>
-              </dl>
-            </Card>
-          </li>
-        ))}
-      </ol>
     </Section>
   );
 }

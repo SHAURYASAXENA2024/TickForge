@@ -41,7 +41,7 @@ export function HowItWorks() {
         <figcaption className="sr-only">Data flow through TickForge: the engine path, the market-data path, and the storage path.</figcaption>
         <FlowLane title="Engine path · implemented" nodes={ENGINE_FLOW} />
         <FlowLane title="Market-data path · implemented" nodes={MARKET_FLOW} />
-        <FlowLane title="Storage path · built, with parts still planned" nodes={STORAGE_FLOW} />
+        <FlowLane title="Storage path" nodes={STORAGE_FLOW} />
       </figure>
 
       <ul className="grid gap-3 md:grid-cols-2">
