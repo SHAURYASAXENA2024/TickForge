@@ -68,7 +68,7 @@ export function TradingActivity({ symbol }: { symbol: string }) {
       ) : (
         <div data-testid="ledger" className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-line bg-raised sm:grid-cols-5">
           {fields.map((f) => (
-            <div key={f.label} className="bg-surface/60 px-4 py-3">
+            <div key={f.label} className="bg-surface/60 px-4 py-3" title={f.value === "–" ? "Not defined yet: needs a sell (or a buy for a short) that closes an earlier lot" : undefined}>
               <div className="text-xs font-semibold text-faint">{f.label}</div>
               <div className={`mt-1.5 font-mono text-lg font-semibold ${f.tone === "up" ? "text-up" : f.tone === "down" ? "text-down" : "text-strong"}`}>{f.value}</div>
             </div>

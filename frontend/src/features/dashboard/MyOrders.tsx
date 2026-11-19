@@ -123,7 +123,7 @@ export function MyOrders({ online }: { online: boolean }) {
               <p className="basis-full text-xs text-muted">A lower quantity at the same price keeps your place in the queue. A new price or a bigger quantity cancels the order and places a new one at the back.</p>
             </form>
           )}
-          <div className="overflow-x-auto">
+          <div className="relative overflow-x-auto">
             <table className="w-full min-w-[640px] text-left text-sm">
               <caption className="sr-only">Orders placed by {MANUAL_TRADER_NAME}</caption>
               <thead className="text-xs text-muted">
@@ -168,7 +168,7 @@ export function MyOrders({ online }: { online: boolean }) {
             {data.fills.length === 0 ? (
               <p className="text-sm text-muted">No fills yet. A fill appears when someone trades against one of your orders.</p>
             ) : (
-              <div className="overflow-x-auto">
+              <div className="relative overflow-x-auto">
                 <table className="w-full min-w-[560px] text-left text-sm">
                   <caption className="sr-only">Fills of {MANUAL_TRADER_NAME}'s orders</caption>
                   <thead className="text-xs text-muted">
