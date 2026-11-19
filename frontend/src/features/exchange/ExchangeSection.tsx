@@ -86,7 +86,7 @@ function TradersPanel({ online, traders }: { online: boolean; traders: Trader[] 
                   <td className="px-4 py-1.5"><span className="font-mono text-faint">{String(t.trader_id).padStart(2, "0")}</span> <span className="text-strong">{t.name}</span></td>
                   <td className="px-3 py-1.5 text-muted">{t.strategy}</td>
                   <td className="px-3 py-1.5 text-right font-mono" title={`Cash ${dollars(t.cash)}, of which ${dollars(t.reserved_cash)} is reserved for open buy orders`}>{dollars(t.available_cash)}</td>
-                  <td className="px-3 py-1.5 text-right font-mono text-muted" title={fmtReservedShares(t.reserved_shares)}>{t.reserved_cash > 0 ? dollars(t.reserved_cash) : DASH}</td>
+                  <td className="px-3 py-1.5 text-right font-mono text-muted" title={t.reserved_cash > 0 ? `${dollars(t.reserved_cash)} reserved for open buy orders. ${fmtReservedShares(t.reserved_shares)}` : `No cash reserved: no open buy orders. ${fmtReservedShares(t.reserved_shares)}`}>{t.reserved_cash > 0 ? dollars(t.reserved_cash) : DASH}</td>
                   <td className="px-3 py-1.5 text-right font-mono">{dollars(t.equity)}</td>
                   <td className={`px-3 py-1.5 text-right font-mono ${t.realized_pnl > 0 ? "text-up" : t.realized_pnl < 0 ? "text-down" : "text-muted"}`}>{signedDollars(t.realized_pnl)}</td>
                   <td className="px-3 py-1.5 text-right font-mono">{t.trades}</td>
