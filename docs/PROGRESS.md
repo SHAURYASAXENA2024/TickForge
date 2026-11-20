@@ -69,3 +69,24 @@ Edited files:
 ## Colour scheme "Violet night"
 
 The old values named in the task (#120B24, #A78BFA) did not exist in `frontend/src/index.css`; the dark canvas was #0b1020 to #111c3a and the accent gradient #22d3ee to #8b5cf6. The new values replace those tokens.
+
+# Recovery demo
+
+Work branch: `recovery-demo` (base: tag `v3-stable`, branch `completion`).
+
+## Baseline (before any change)
+
+| Check | Result |
+|---|---|
+| C++ engine tests (ctest) | 27 of 27 passed |
+| Rust tests (cargo test) | 16 unit + 14 database + 3 uring passed |
+| Database Python binding | passed |
+| exchange-api (pytest) | 59 passed, 1 skipped |
+| market-data (pytest) | 28 passed |
+| frontend typecheck / vitest | clean / 32 passed |
+| kill -9 recovery (`./build.sh kill9`) | 20000 orders, last_seq 20000, state hash `69a6a28ee55e622b` before and after restart |
+
+## Time per task
+
+| Task | Minutes | Status |
+|---|---|---|

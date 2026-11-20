@@ -27,6 +27,7 @@
 #include "json_lite.hpp"
 #include "lock_free_queue.hpp"
 #include "map_book.hpp"
+#include <filesystem>
 #include "replay.hpp"
 #include "uring.hpp"
 #include "wal.hpp"
@@ -74,7 +75,7 @@ static void on_signal(int) { g_stop.store(true); }
 
 // One unit of work for the matching thread.
 struct Job {
-  enum Kind : uint8_t { NewOrder, Cancel, BookCmd, StatsCmd, HashCmd, AccountsCmd, Reset, Reference, ReferenceCmd, Amend };
+  enum Kind : uint8_t { NewOrder, Cancel, BookCmd, StatsCmd, HashCmd, AccountsCmd, Reset, Reference, ReferenceCmd, Amend, WalStatusCmd };
   Kind kind = NewOrder;
   uint32_t conn_id = 0; // who gets the reply
   int64_t client_ref = 0;
@@ -200,12 +201,19 @@ public:
     if (opt_.elastic_queue) ring_ = std::make_unique<ElasticRing<Job>>(opt_.ring_size);
     std::vector<Trade> ignored;
     WalRecord last;
+    const int64_t rec_start_ns = now_ns();
     WalRecovery r = wal_recover(opt_.wal_path, [&](const WalRecord &rec) {
       ignored.clear();
       apply_record(ex_, rec, ignored);
       last = rec;
     });
     seq_ = r.last_seq;
+    // Recovery summary for wal_status. frames_written counts every frame in the file.
+    frames_written_.store(r.records, std::memory_order_relaxed);
+    crc_errors_.store(r.dropped_bytes > 0 ? 1 : 0, std::memory_order_relaxed);
+    rec_frames_ = r.records;
+    rec_duration_ms_ = (now_ns() - rec_start_ns) / 1e6;
+    rec_at_ms_ = now_ms();
     last_crc_ = r.records > 0 ? wal_frame_crc(last) : 0;
     wal_ = std::make_unique<WalWriter>(opt_.wal_path, opt_.wal_io);
     std::fprintf(stderr, "engine: recovered %llu records, last_seq %llu, dropped %llu bytes\n",
@@ -615,6 +623,8 @@ private:
       job.kind = Job::StatsCmd;
     } else if (name == "state_hash") {
       job.kind = Job::HashCmd;
+    } else if (name == "wal_status") {
+      job.kind = Job::WalStatusCmd;
     } else if (name == "book") {
       int64_t symbol, depth = 10;
       if (!get_int(m, "symbol_id", symbol)) {
@@ -640,6 +650,7 @@ private:
   void write_wal(const WalRecord &rec) {
     try {
       wal_->append(rec);
+      frames_written_.fetch_add(1, std::memory_order_relaxed);
     } catch (const std::exception &e) {
       std::fprintf(stderr, "engine: fatal: %s\n", e.what());
       std::_Exit(1);
@@ -983,6 +994,9 @@ private:
     case Job::StatsCmd:
       reply_to(job.conn_id, stats_json());
       break;
+    case Job::WalStatusCmd:
+      reply_to(job.conn_id, wal_status_json());
+      break;
     }
   }
 
@@ -1037,6 +1051,26 @@ private:
     }
     return "{\"type\":\"book\",\"symbol_id\":" + std::to_string(symbol) +
            ",\"bids\":" + levels_json(bids) + ",\"asks\":" + levels_json(asks) + "}\n";
+  }
+
+  // WAL and recovery numbers. Counters are atomics; the hash and sequence are read on the
+  // matching thread like state_hash. The file size comes from the file system.
+  std::string wal_status_json() {
+    std::error_code ec;
+    uint64_t bytes = static_cast<uint64_t>(std::filesystem::file_size(opt_.wal_path, ec));
+    if (ec) bytes = 0;
+    char buf[640];
+    std::snprintf(buf, sizeof(buf),
+                  "{\"type\":\"wal_status\",\"wal_bytes\":%llu,\"frames_written\":%llu,"
+                  "\"last_sequence\":%llu,\"state_hash\":\"%s\",\"crc_errors\":%llu,"
+                  "\"queue_depth\":%llu,"
+                  "\"last_recovery\":{\"frames_replayed\":%llu,\"duration_ms\":%.3f,\"recovered_at\":%llu}}\n",
+                  (unsigned long long)bytes, (unsigned long long)frames_written_.load(std::memory_order_relaxed),
+                  (unsigned long long)ex_.last_seq(), hash_hex(ex_.state_hash()).c_str(),
+                  (unsigned long long)crc_errors_.load(std::memory_order_relaxed),
+                  (unsigned long long)(submitted_.load() > processed_ ? submitted_.load() - processed_ : 0),
+                  (unsigned long long)rec_frames_, rec_duration_ms_, (unsigned long long)rec_at_ms_);
+    return buf;
   }
 
   std::string stats_json() {
@@ -1127,6 +1161,11 @@ private:
   std::mutex wal_mu_;
   std::condition_variable wal_cv_;
   std::atomic<uint64_t> wal_appends_{0};
+  std::atomic<uint64_t> frames_written_{0};
+  std::atomic<uint64_t> crc_errors_{0};
+  uint64_t rec_frames_ = 0;       // set once in the constructor
+  double rec_duration_ms_ = 0;
+  uint64_t rec_at_ms_ = 0;        // unix ms
   std::atomic<int> replicas_{0};
   std::atomic<bool> leader_connected_{false};
   std::atomic<uint64_t> damaged_frames_{0}; // a follower recovers from these by reconnecting
