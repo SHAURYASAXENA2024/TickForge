@@ -24,6 +24,9 @@ class Settings:
     dispatch: str = "roundrobin"  # which virtual trader sends the next order: "roundrobin" or "random"
     stop_orders: bool = True  # accept stop and stop-limit orders (POST /stops)
 
+    # Crash recovery demo (see app/recovery.py): off unless TICKFORGE_DEMO=1
+    demo_enabled: bool = False
+
     # Knobs for tests; not read from the environment.
     traders_start_running: bool = True
     orders_per_second: float = 4.0  # virtual-trader order rate at speed 1
@@ -41,5 +44,6 @@ class Settings:
             reference_live=env.get("TICKFORGE_REFERENCE", "live") != "snapshot",
             dispatch=env.get("TICKFORGE_DISPATCH", "roundrobin"),
             stop_orders=env.get("TICKFORGE_STOP_ORDERS", "1") != "0",
+            demo_enabled=env.get("TICKFORGE_DEMO", "") == "1",
             market_data_url=env.get("TICKFORGE_MARKET_DATA_URL", "http://127.0.0.1:8000"),
         )
