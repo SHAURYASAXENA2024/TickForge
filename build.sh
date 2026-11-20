@@ -216,7 +216,23 @@ run_stack() {
   say "Starting"
   # TICKFORGE_ENGINE_FLAGS adds engine options, for example "--pin".
   # shellcheck disable=SC2086
-  start engine "$ROOT" "$ENGINE_BUILD/engine_server" --port "$ENGINE_PORT" --wal "$DATA/engine.wal" --accounts ${TICKFORGE_ENGINE_FLAGS:-}
+  # The supervisor (this script) owns the engine PID. With TICKFORGE_DEMO=1 it restarts a dead engine
+  # on the same port and WAL, and writes who it is to $DATA/supervisor.json for exchange-api.
+  DEMO="${TICKFORGE_DEMO:-0}"
+  ENGINE_RESTARTS=0
+  ENGINE_LAST_RESTART_MS=0
+  start_engine() {
+    # shellcheck disable=SC2086
+    start engine "$ROOT" "$ENGINE_BUILD/engine_server" --port "$ENGINE_PORT" --wal "$DATA/engine.wal" --accounts ${TICKFORGE_ENGINE_FLAGS:-}
+    ENGINE_PID=$LAST_PID
+    write_supervisor_file
+  }
+  write_supervisor_file() {
+    printf '{"supervised":true,"restart_on_crash":%s,"engine_pid":%s,"restarts":%s,"last_restart_ms":%s}\n' \
+      "$([ "$DEMO" = 1 ] && echo true || echo false)" "$ENGINE_PID" "$ENGINE_RESTARTS" "$ENGINE_LAST_RESTART_MS" \
+      > "$DATA/supervisor.json.tmp" && mv "$DATA/supervisor.json.tmp" "$DATA/supervisor.json"
+  }
+  start_engine
   wait_until engine "$LAST_PID" port_open "$ENGINE_PORT"
   echo "engine          127.0.0.1:$ENGINE_PORT"
 
@@ -247,10 +263,23 @@ EOF
 
   # Stay alive; if any part dies, say so and stop the rest.
   while true; do
-    for pid in "${PIDS[@]}"; do
-      kill -0 "$pid" 2> /dev/null || fail "a TickForge process stopped (pid $pid). Check the logs in $LOGS"
+    for i in "${!PIDS[@]}"; do
+      pid="${PIDS[$i]}"
+      [ -n "$pid" ] || continue
+      kill -0 "$pid" 2> /dev/null && continue
+      if [ "$DEMO" = 1 ] && [ "$pid" = "$ENGINE_PID" ]; then
+        wait "$pid" 2> /dev/null || true
+        echo "engine (pid $pid) died; restarting it on port $ENGINE_PORT with the same WAL"
+        start_engine # appends the new PID to PIDS
+        PIDS[i]="" # the dead one is no longer watched
+        ENGINE_RESTARTS=$((ENGINE_RESTARTS + 1))
+        ENGINE_LAST_RESTART_MS=$(( $(date +%s%N) / 1000000 ))
+        write_supervisor_file
+        continue
+      fi
+      fail "a TickForge process stopped (pid $pid). Check the logs in $LOGS"
     done
-    sleep 1
+    sleep 0.2
   done
 }
 

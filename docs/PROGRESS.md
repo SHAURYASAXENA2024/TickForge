@@ -69,3 +69,34 @@ Edited files:
 ## Colour scheme "Violet night"
 
 The old values named in the task (#120B24, #A78BFA) did not exist in `frontend/src/index.css`; the dark canvas was #0b1020 to #111c3a and the accent gradient #22d3ee to #8b5cf6. The new values replace those tokens.
+
+# Recovery demo
+
+Work branch: `recovery-demo` (base: tag `v3-stable`, branch `completion`).
+
+## Baseline (before any change)
+
+| Check | Result |
+|---|---|
+| C++ engine tests (ctest) | 27 of 27 passed |
+| Rust tests (cargo test) | 16 unit + 14 database + 3 uring passed |
+| Database Python binding | passed |
+| exchange-api (pytest) | 59 passed, 1 skipped |
+| market-data (pytest) | 28 passed |
+| frontend typecheck / vitest | clean / 32 passed |
+| kill -9 recovery (`./build.sh kill9`) | 20000 orders, last_seq 20000, state hash `69a6a28ee55e622b` before and after restart |
+
+## Time per task
+
+| Task | Minutes | Status |
+|---|---|---|
+| T1 engine `wal_status` | about 12 | done | e2e test checks fields, hash and sequence equal `state_hash`, replay count after kill -9; ctest 27 of 27 incl. TSan and ASan |
+| T2 supervisor | about 6 | done | `build.sh` restart loop with `TICKFORGE_DEMO=1`; proven by the verify script (3 restarts counted) |
+| T3 exchange-api | about 15 | done | `tests/test_recovery.py`: comparison (match and deliberate mismatch giving FAIL), 403, 409, order block, cleanup after FAIL, two real crash demos against the real engine; exchange-api 67 passed 1 skipped |
+| T4 frontend panel | about 10 | done | 7 render tests (stats, demo off, two-step confirm, API error, PASS, FAIL, grouping); frontend 39 passed |
+| T5 verify script | about 12 | done | `scripts/verify_recovery_demo.sh` passed 3 runs in a row, about 33 s each; replays of about 23,700 frames took 19 to 63 ms |
+| Docs | about 5 | done | README, DATA_SOURCES, DECISIONS, How'z that entry |
+
+## Final gate
+
+`./build.sh test` all green (27 ctest, Rust 16+14+3, binding, exchange-api 67 passed 1 skipped, market-data 28, frontend 39). `./build.sh kill9`: 20000 orders, last_seq 20000, hash `69a6a28ee55e622b` before and after, identical to the baseline.
