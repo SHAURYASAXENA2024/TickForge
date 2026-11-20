@@ -139,6 +139,15 @@ int main(int argc, char **argv) {
   std::string h1 = a.ask("{\"type\":\"command\",\"name\":\"state_hash\"}", "state_hash");
   std::string book1 = a.ask("{\"type\":\"command\",\"name\":\"book\",\"symbol_id\":1,\"depth\":50}", "book");
   CHECK(!extract(h1, "hash").empty());
+  std::string ws1 = a.ask("{\"type\":\"command\",\"name\":\"wal_status\"}", "wal_status");
+  for (const char *key : {"wal_bytes", "frames_written", "last_sequence", "state_hash", "crc_errors",
+                          "last_recovery", "frames_replayed", "duration_ms", "recovered_at"})
+    CHECK(ws1.find(std::string("\"") + key + "\":") != std::string::npos);
+  CHECK(extract(ws1, "state_hash") == extract(h1, "hash"));
+  CHECK(extract(ws1, "last_sequence") == extract(h1, "last_seq"));
+  CHECK(std::atoll(extract(ws1, "wal_bytes").c_str()) > 8);
+  CHECK(std::atoll(extract(ws1, "frames_written").c_str()) >= 300);
+  CHECK(extract(ws1, "frames_replayed") == "0"); // fresh WAL: nothing to replay
 
   // ---- crash ----
   kill(server, SIGKILL);
@@ -155,6 +164,13 @@ int main(int argc, char **argv) {
   std::printf("  before crash: %s\n  after restart: %s\n", h1.c_str(), h2.c_str());
   CHECK(h1 == h2);
   CHECK(book1 == book2);
+  std::string ws2 = c.ask("{\"type\":\"command\",\"name\":\"wal_status\"}", "wal_status");
+  CHECK(extract(ws2, "state_hash") == extract(ws1, "state_hash"));
+  CHECK(extract(ws2, "last_sequence") == extract(ws1, "last_sequence"));
+  CHECK(extract(ws2, "frames_replayed") == extract(ws1, "frames_written"));
+  CHECK(extract(ws2, "frames_written") == extract(ws1, "frames_written"));
+  CHECK(extract(ws2, "crc_errors") == "0");
+  CHECK(std::atoll(extract(ws2, "recovered_at").c_str()) > 0);
 
   // numbering continues after the last logged seq
   r = c.request(order_json(900, 1, "BUY", 9000, 1), 900);

@@ -16,6 +16,7 @@ page: it is labelled as such where it appears and nothing in it pretends to be l
 | Engine: My orders | Kapinza's orders, status, filled quantity, fills with counterparty | Rust trade database | `GET /orders?trader_id=25`, `GET /traders/25/fills`, `PATCH /orders/{id}`, `DELETE /orders/{id}` |
 | Engine: order path | producers, queue, matcher, trades, saved trades | engine stats and exchange-api health | `ws /ws/telemetry`, `GET /health` |
 | Engine: latency histogram | matching latency buckets | engine stats | `ws /ws/telemetry` |
+| Engine: crash recovery | WAL size, frames, last sequence, state hash, CRC errors, restarts; the crash demo and its before and after table | engine `wal_status` command and the supervisor file `.run/data/supervisor.json`, through exchange-api | `GET /recovery/status`, `POST /recovery/crash-demo` (needs `TICKFORGE_DEMO=1`, localhost only) |
 | Market: price chart | price history of the chosen stock | market-data (Yahoo, cached 30 s) | `GET /api/stocks/{symbol}?range=&interval=` |
 | Market: stock list | the 504 S&P 500 listings and sectors | static file `frontend/src/features/market/sp500.ts` | none |
 | Journey: chart, story, tiles | bars, swings, volume, since-listing block | market-data (Yahoo) | `GET /api/stocks/{symbol}/journey?range=` |

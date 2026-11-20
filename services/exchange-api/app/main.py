@@ -16,7 +16,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 
-from app import routes
+from app import recovery, routes
 from app.scheduling import RoundRobin, StopBook
 from app.config import Settings
 from app.db import open_db
@@ -56,6 +56,7 @@ class Exchange:
         self.trader_state: dict[int, str] = {}
         self.symbol_state: dict[str, str] = {}
         self._manual_in_flight = 0
+        self.demo = recovery.Demo()  # the crash recovery demo: while active, nothing may write to the engine
         self.manual = make_manual_trader(self.prices)  # Kapinza: the order ticket's account
         self._reject_seq = REJECTED_ID_BASE
         self.engine = EngineClient(settings.engine_host, settings.engine_port, settings.reconnect_seconds)
@@ -204,6 +205,7 @@ class Exchange:
         """Change a resting order. A lower quantity at the same price is done in the engine and keeps the
         order's place in the queue. A new price or a bigger quantity is a cancel plus a new order (a new
         order id, at the back of the queue). `qty` is the new remaining quantity. Raises EngineDown or Rejected."""
+        recovery.guard_orders(self)
         row = await self.db(self.store.get_order, order_id)
         if row is None:
             raise Rejected("unknown_order")
@@ -249,6 +251,7 @@ class Exchange:
 
     async def cancel_order(self, order_id: int) -> int:
         """Cancel one order in the engine and record it. Raises EngineDown or Rejected."""
+        recovery.guard_orders(self)
         result = await self.engine.cancel(order_id)
         self._persist_queue.put_nowait(("cancel", order_id))
         return result
@@ -258,6 +261,11 @@ class Exchange:
         each trade to /ws/trades clients."""
         while True:
             kind, item = await self._persist_queue.get()
+            if kind == "barrier":  # everything queued before this marker is saved
+                await self.db(lambda: None)
+                if not item.done():
+                    item.set_result(True)
+                continue
             try:
                 if kind == "trade":
                     await self.db(self._insert_trade, item)
@@ -276,6 +284,7 @@ class Exchange:
     async def place_order(self, trader_id: int, symbol: str, side: str, price: int, qty: int) -> int:
         """Send one order to the engine. Trader id 0 means a manual order: it belongs to Kapinza.
         Raises EngineDown or Rejected."""
+        recovery.guard_orders(self)
         if self.symbol_state.get(symbol, "running") != "running":
             raise Rejected("symbol paused")
         manual = (trader_id or MANUAL_ID) == MANUAL_ID
@@ -358,8 +367,8 @@ class Exchange:
     async def seed_engine(self) -> None:
         """Tell the engine each symbol's reference price when it differs from what it has. The engine
         then measures its price band from it and clears resting orders far from it."""
-        if not self.engine.connected:
-            return
+        if not self.engine.connected or self.demo.active:
+            return  # (the demo needs the engine's log to stand still)
         try:
             if self._seeded_connection != self.engine.connections:
                 reply = await self.engine.command("reference")  # a restarted engine replays its own
@@ -385,6 +394,7 @@ class Exchange:
     async def reset_traders(self) -> None:
         """Cancel the virtual traders' open orders, then give each of them the starting cash and
         shares, in the engine (which owns the balances) and here."""
+        recovery.guard_orders(self)
         for order_id, (owner, _) in list(self.engine.owners.items()):
             if owner > len(self.traders):
                 continue  # Kapinza's orders are not touched by a reset
@@ -462,7 +472,10 @@ class Exchange:
         if name in ("start", "pause", "stop"):
             self.state = {"start": "running", "pause": "paused", "stop": "stopped"}[name]
         elif name == "reset":
-            await self.reset_traders()
+            try:
+                await self.reset_traders()
+            except Rejected as exc:
+                self.notice = f"reset not done: {exc.reason}"
         elif name == "speed":
             if cmd.get("value") in SPEEDS:
                 self.speed = cmd["value"]
@@ -567,6 +580,7 @@ def create_app(settings: Settings | None = None, reference_fetch=None) -> FastAP
         allow_headers=["*"],
     )
     app.include_router(routes.router)
+    app.include_router(recovery.router)
     return app
 
 

@@ -27,6 +27,14 @@ That checks your tools (and prints the install command for anything missing), bu
 | `./build.sh kill9 [engine flags]` | crash check: send orders, `kill -9` the engine, restart it, compare state hashes |
 | `./build.sh clean` | delete build output, `.venv`, `node_modules` and runtime data (`.run/`) |
 
+### Crash recovery demo
+
+```bash
+TICKFORGE_DEMO=1 ./build.sh
+```
+
+With `TICKFORGE_DEMO=1` the script restarts the engine (same port, same WAL) if it dies, and the **Crash recovery** panel on the Engine tab can kill it for real with SIGKILL: it pauses the traders, takes a snapshot, kills the engine, waits for the log replay, takes a second snapshot and shows PASS or FAIL per field. This protects against a process crash, not power loss (no fsync). Without the flag the panel is disabled and `POST /recovery/crash-demo` returns 403. `scripts/verify_recovery_demo.sh` runs the whole thing headless (three crashes in a row, the guards, and orders after recovery).
+
 Logs are in `.run/logs/`, data in `.run/data/`. Nothing is installed outside this folder, and the script never uses `sudo`.
 
 ## How it fits together
