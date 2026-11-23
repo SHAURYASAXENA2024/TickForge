@@ -112,3 +112,4 @@ Work branch: `recovery-demo` (base: tag `v3-stable`, branch `completion`).
 | E | 16:00 | done | gate green (exchange-api 90 passed 1 skipped, vitest 53), kill9 hash unchanged, verify demo passed; live check of /report/summary on the real stack; /report/summary, report.py (9 tests), Report tab (7 vitest) |
 | F | 16:05 | done | price alerts in exchange-api (12 tests) and Alerts card with toast (4 vitest); gate green: exchange-api 102 passed 1 skipped, vitest 57; kill9 hash unchanged; verify demo passed |
 | G | 16:12 | done | wal_replay tool on a copy of the WAL (engine replay code unmodified), /replay, slider in the Crash recovery area; gate green: ctest 28, exchange-api 104 passed 1 skipped, vitest 59; kill9 hash unchanged; verify demo passed; live /replay checked on the real stack |
+| H | 16:25 | done | three fresh-clone runs passed, attribution and path and secret sweeps run (five older pushed commits keep a trailer, see DECISIONS), SUBMISSION.md, v-final |
