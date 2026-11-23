@@ -50,3 +50,11 @@ def client(engine):
 def order(client, trader_id, side, price, qty, symbol="AAPL"):
     return client.post("/orders", json={"trader_id": trader_id, "symbol": symbol, "side": side,
                                         "price": price, "qty": qty})
+
+
+@pytest.fixture(autouse=True)
+def _reset_order_rate_limit():
+    from app import routes
+
+    routes._order_times.clear()
+    yield

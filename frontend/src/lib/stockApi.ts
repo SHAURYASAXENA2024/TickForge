@@ -17,6 +17,8 @@ export type StockSnapshot = {
   volume: number;
   marketState: string;
   updatedAt: string;
+  /** true when market-data served its saved snapshot instead of live Yahoo data */
+  offline?: boolean;
   history: PricePoint[];
 };
 

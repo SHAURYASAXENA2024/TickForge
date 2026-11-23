@@ -8,6 +8,7 @@ import { Link, researchPath } from "@/lib/router";
 import { scrollToSection, useActiveSection } from "@/lib/scroll";
 import { TELEMETRY_URL, useTelemetry, type EngineState } from "@/lib/telemetry";
 import { useTheme } from "@/lib/theme";
+import { ConnectionBanner } from "./ConnectionBanner";
 import { EngineSection } from "./EngineSection";
 
 const NAV = [
@@ -28,7 +29,7 @@ const STATE_TEXT: Record<EngineState, string> = {
 
 export default function Dashboard() {
   const { link, engineState, engineError, stats, send } = useTelemetry();
-  const { health, online, traders, trades } = useExchange();
+  const { health, online, traders, trades, lastUpdated } = useExchange();
   const active = useActiveSection(NAV_IDS);
   const { theme, toggle } = useTheme();
 
@@ -73,6 +74,7 @@ export default function Dashboard() {
           </div>
         </div>
       </header>
+      <ConnectionBanner online={online} engineConnected={health?.engine === "connected"} lastUpdated={lastUpdated} />
 
       <main className="mx-auto max-w-[1400px] px-4 lg:px-8">
         <div className="flex flex-wrap items-center gap-3 border-b border-line py-4" role="region" aria-label="Simulation controls">
@@ -114,6 +116,7 @@ export default function Dashboard() {
                   ["exchange-api (port 8001)", online ? "reachable" : "not reachable", online],
                   ["Matching engine (port 9100)", health?.engine === "connected" ? "connected" : "not connected", health?.engine === "connected"],
                   ["Trades saved in the database", health ? String(health.trades) : "unknown", health !== null],
+                  ["Last updated", lastUpdated ? lastUpdated.toLocaleTimeString() : "never", lastUpdated !== null],
                   ["Virtual traders", traders.length > 0 ? `${traders.length} accounts` : "no data", traders.length > 0],
                 ] as const).map(([label, value, ok]) => (
                   <div key={label} className="flex items-center justify-between gap-3 px-4 py-2.5">

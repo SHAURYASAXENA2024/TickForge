@@ -130,6 +130,8 @@ export async function postOrder(order: { symbol: string; side: TradeSide; price:
     const body = (await res.json()) as { detail?: { reason?: string } };
     throw new OrderRejected(body.detail?.reason ?? "rejected");
   }
+  if (res.status === 429) throw new Error("Too many orders: please wait a second and try again.");
+  if (res.status === 422) throw new Error("The order was refused: check shares (1 to 10,000) and price.");
   if (!res.ok) throw new Error(res.status === 503 ? "The matching engine is not reachable." : `exchange-api ${res.status}`);
   return ((await res.json()) as { order_id: number }).order_id;
 }

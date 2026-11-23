@@ -90,6 +90,7 @@ function QuotePanel({ symbol }: { symbol: string }) {
               </div>
               <div className="mt-1 text-xs text-muted">Updated {new Date(snapshot.updatedAt).toLocaleTimeString()}</div>
             </div>
+            {snapshot.offline && <Notice tone="error" title="Using saved prices (offline)">Yahoo is not reachable, so these are the last prices market-data saved.</Notice>}
             {state === "stale" && error && <Notice tone="error" title="Showing the last good data">The latest refresh failed: {error.message}</Notice>}
             <dl className="grid grid-cols-2 gap-3 text-sm">
               <div><dt className="text-xs text-muted">Return, {window_.label.toLowerCase()}</dt><dd className={`font-mono ${windowReturn !== null && windowReturn < 0 ? "text-down" : "text-up"}`}>{windowReturn !== null ? fmtPct(windowReturn) : DASH}</dd></div>

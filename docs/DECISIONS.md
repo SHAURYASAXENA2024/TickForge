@@ -230,3 +230,10 @@ Kernel-bypass networking (AF_XDP) is not part of this project: it is not built, 
 ### Not completed and why
 - `./build.sh bench` was not run: the matching hot path logic did not change; the only change on the write path is one relaxed atomic increment per frame. TSan and ASan engine tests ran inside `./build.sh test` and passed.
 - Panel not checked in a real browser in this run; it is covered by the render tests (demo off, API error, PASS, FAIL) and by the API checks in the verify script.
+
+## Final polish decisions
+- Phase C: market-data saves each successful quote to `$TICKFORGE_DATA_DIR/market_snapshot.json` and serves it with `"offline": true` when Yahoo fails or `TICKFORGE_OFFLINE=1`; the market panel shows "Using saved prices (offline)". With no saved entry the old error panel stays.
+- Phase C: manual order limits are 1 to 10,000 shares (matches the engine's max_qty) and price above 0 with at most 2 decimals; the rate limit (10 per second per client) applies to manual orders (trader 0 and Kapinza) only; virtual-trader ids sent through the API are not limited.
+- Phase C: tests that used a 20,000-share order to get an engine reject now use an unaffordable BUY (insufficient_cash), because 20,000 shares is refused earlier with 422.
+- Phase C: scripts/verify_recovery_demo.sh sleeps 0.15 s between its 24 orders to stay under the rate limit.
+- Phase C: panels already had loading, empty and error states (checked EngineSection, ExchangeSection, MyOrders, TradingActivity, OrderTicket); no change needed.

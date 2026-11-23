@@ -107,3 +107,4 @@ Work branch: `recovery-demo` (base: tag `v3-stable`, branch `completion`).
 |---|---|---|---|
 | A | 15:50 | done | tag v-pre-final pushed, backup in ~/backups, gate green (ctest, Rust, binding, pytest, vitest), kill9 hash 69a6a28ee55e622b before and after, verify_recovery_demo passed |
 | B | 16:10 | done | docs/CLAIMS_AUDIT.md; stale counts fixed in README and How'z that; triggers/alerts Missing so phase F applies; frontend typecheck and vitest green (docs/text-only change) |
+| C | 16:05 | done | market-data offline snapshot (4 tests), connection banner + last updated (3 tests), order validation and 10/s rate limit (14 tests + 4 frontend tests); gate green: ctest 27, Rust 33, binding 11, exchange-api 81 passed 1 skipped, market-data 32, vitest 46; kill9 hash 69a6a28ee55e622b before and after; verify_recovery_demo passed |

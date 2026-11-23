@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from collections import deque
 
 from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
@@ -54,12 +55,32 @@ async def health(request: Request):
     }
 
 
+MAX_ORDER_QTY = 10_000
+ORDERS_PER_SECOND = 10
+_order_times: dict[str, deque] = {}
+
+
+def _rate_limit(client: str) -> None:
+    """At most ORDERS_PER_SECOND manual orders per second per client; the error says when to retry."""
+    now = time.monotonic()
+    times = _order_times.setdefault(client, deque())
+    while times and now - times[0] >= 1.0:
+        times.popleft()
+    if len(times) >= ORDERS_PER_SECOND:
+        raise HTTPException(status_code=429, detail="too many orders: at most 10 per second", headers={"Retry-After": "1"})
+    times.append(now)
+
+
 @router.post("/orders")
 async def post_order(order: OrderIn, request: Request):
     ex = _exchange(request)
+    if order.trader_id in (0, MANUAL_ID):  # the form sends as Kapinza; virtual traders do not use this endpoint
+        _rate_limit(request.client.host if request.client else "unknown")
     _check_symbol(order.symbol)
     if order.side not in ("BUY", "SELL") or order.price <= 0 or order.qty <= 0:
         raise HTTPException(status_code=422, detail="side must be BUY or SELL; price and qty must be positive")
+    if order.qty > MAX_ORDER_QTY:
+        raise HTTPException(status_code=422, detail=f"shares must be a whole number from 1 to {MAX_ORDER_QTY}")
     if not 0 <= order.trader_id <= MANUAL_ID:
         raise HTTPException(status_code=422, detail=f"trader_id must be 0 to {MANUAL_ID}")
     try:

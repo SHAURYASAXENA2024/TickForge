@@ -242,7 +242,7 @@ run_stack() {
   wait_until exchange-api "$LAST_PID" http_ok "http://127.0.0.1:$API_PORT/health"
   echo "exchange-api    http://127.0.0.1:$API_PORT"
 
-  start market-data "$ROOT/services/market-data" "$PY" -m uvicorn app.main:app --host 127.0.0.1 --port "$MARKET_PORT"
+  start market-data "$ROOT/services/market-data" env TICKFORGE_DATA_DIR="$DATA" "$PY" -m uvicorn app.main:app --host 127.0.0.1 --port "$MARKET_PORT"
   wait_until market-data "$LAST_PID" http_ok "http://127.0.0.1:$MARKET_PORT/hello"
   echo "market-data     http://127.0.0.1:$MARKET_PORT"
 

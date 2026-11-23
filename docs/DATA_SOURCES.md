@@ -37,3 +37,6 @@ page: it is labelled as such where it appears and nothing in it pretends to be l
 
 - Stop orders held in exchange-api (`/stops`) have no ticket control yet; they are API only.
 - Benchmark figures in the docs come from `./build.sh bench` runs, not from the running stack.
+
+## Offline mode
+`TICKFORGE_OFFLINE=1` (market-data) serves the last saved quotes from `market_snapshot.json` in the data directory instead of calling Yahoo. The same snapshot is used when a Yahoo call fails. Replies carry `"offline": true` and the UI shows "Using saved prices (offline)". `TICKFORGE_DEMO=1` is the crash recovery demo switch (see README).
