@@ -17,6 +17,7 @@ from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import recovery, routes
+from app.alerts import AlertBook
 from app.scheduling import RoundRobin, StopBook
 from app.config import Settings
 from app.db import open_db
@@ -51,6 +52,7 @@ class Exchange:
         self.traders = make_traders(self.prices)
         self.round_robin = RoundRobin(self.traders)
         self.stops = StopBook()
+        self.alerts = AlertBook(None if settings.memory_db else settings.data_dir, set(ALL_SYMBOLS))
         # Control of single traders and symbols: "running", "paused" (no new orders, resting orders stay)
         # or "stopped" (no new orders, resting orders cancelled). The global state above still applies to all.
         self.trader_state: dict[int, str] = {}
@@ -117,6 +119,7 @@ class Exchange:
         price, qty = msg["price"], msg["qty"]
         self.prices[symbol] = price
         self._fire_stops(symbol, price)
+        self.alerts.check(symbol, price)
         for trader_id, side in ((msg["buyer_id"], "BUY"), (msg["seller_id"], "SELL")):
             account = self.account(trader_id)
             if account is not None:  # id 0 = an order whose owner is unknown
@@ -542,6 +545,8 @@ class Exchange:
                 log.exception("tick failed")
 
     async def tick(self) -> None:
+        for symbol, price in list(self.prices.items()):  # the last price, or the reference price when nothing has traded
+            self.alerts.check(symbol, price)
         await self._send_status()
         await self.refresh_accounts()
         if self.engine.connected:

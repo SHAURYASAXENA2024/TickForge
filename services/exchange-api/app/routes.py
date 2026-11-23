@@ -9,6 +9,7 @@ from collections import deque
 from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
+from app.alerts import AlertError
 from app.ledger import compute_activity
 from app.report import WINDOWS_MS, build_report
 from app.engine_client import EngineDown, Rejected
@@ -241,6 +242,33 @@ async def trader_activity(trader_id: int, request: Request, symbol: str = DEFAUL
     trades = await ex.db(ex.store.trades_by_trader, trader_id, 1_000_000)
     fills = [{**t, "side": "BUY" if t["buyer_id"] == trader_id else "SELL"} for t in trades if t["symbol"] == symbol]
     return {"trader_id": trader_id, "symbol": symbol, **compute_activity(fills, ex.prices.get(symbol))}
+
+
+class AlertIn(BaseModel):
+    symbol: str
+    direction: str  # above or below
+    price: int  # cents
+
+
+@router.post("/alerts")
+async def post_alert(alert: AlertIn, request: Request):
+    """Create a price alert. It fires once, when the last (or reference) price reaches `price`."""
+    try:
+        return _exchange(request).alerts.add(alert.symbol, alert.direction, alert.price)
+    except AlertError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.get("/alerts")
+async def list_alerts(request: Request):
+    return {"alerts": list(reversed(_exchange(request).alerts.alerts))}
+
+
+@router.delete("/alerts/{alert_id}")
+async def delete_alert(alert_id: int, request: Request):
+    if not _exchange(request).alerts.remove(alert_id):
+        raise HTTPException(status_code=404, detail="no such alert")
+    return {"alert_id": alert_id}
 
 
 @router.get("/report/summary")
