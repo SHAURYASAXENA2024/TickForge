@@ -106,3 +106,4 @@ Work branch: `recovery-demo` (base: tag `v3-stable`, branch `completion`).
 | Phase | Time IST | Status | Evidence |
 |---|---|---|---|
 | A | 15:50 | done | tag v-pre-final pushed, backup in ~/backups, gate green (ctest, Rust, binding, pytest, vitest), kill9 hash 69a6a28ee55e622b before and after, verify_recovery_demo passed |
+| B | 16:10 | done | docs/CLAIMS_AUDIT.md; stale counts fixed in README and How'z that; triggers/alerts Missing so phase F applies; frontend typecheck and vitest green (docs/text-only change) |
