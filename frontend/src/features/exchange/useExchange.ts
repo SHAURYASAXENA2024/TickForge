@@ -7,6 +7,7 @@ const MAX_TRADES = 200;
 export function useExchange() {
   const [health, setHealth] = useState<ExchangeHealth | null>(null);
   const [online, setOnline] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [traders, setTraders] = useState<Trader[]>([]);
   const [trades, setTrades] = useState<LiveTrade[]>([]);
 
@@ -15,6 +16,7 @@ export function useExchange() {
       try {
         setHealth(await getExchangeHealth());
         setOnline(true);
+        setLastUpdated(new Date());
       } catch {
         setOnline(false);
         setHealth(null);
@@ -37,5 +39,5 @@ export function useExchange() {
     };
   }, []);
 
-  return { health, online, traders, trades };
+  return { health, online, traders, trades, lastUpdated };
 }

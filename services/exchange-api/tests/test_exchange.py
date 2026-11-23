@@ -71,8 +71,8 @@ def test_manual_orders_belong_to_kapinza_and_the_other_side_is_updated(client):
 
 
 def test_reject_and_bad_input(client):
-    r = order(client, 1, "BUY", 19000, 20000)
-    assert r.status_code == 409 and r.json()["detail"]["reason"] == "max_qty"
+    r = order(client, 1, "BUY", 19000, 10000)
+    assert r.status_code == 409 and r.json()["detail"]["reason"] == "insufficient_cash"
     assert order(client, 1, "HOLD", 19000, 1).status_code == 422
     assert order(client, 99, "BUY", 19000, 1).status_code == 422
     assert order(client, 26, "BUY", 19000, 1).status_code == 422
@@ -144,13 +144,13 @@ def test_a_trader_never_trades_with_their_own_resting_order(client):
 
 
 def test_rejected_and_cancelled_orders_are_stored(client):
-    assert order(client, 0, "BUY", 19000, 20000).status_code == 409    # max_qty
+    assert order(client, 0, "BUY", 19000, 10000).status_code == 409    # insufficient_cash
     kept = order(client, 0, "BUY", 18000, 5).json()["order_id"]
     assert client.delete(f"/orders/{kept}").status_code == 200
     rows = wait_for(lambda: len(orders_of(client)) == 2 and
                     {r["status"] for r in orders_of(client)} == {"rejected", "cancelled"} and orders_of(client))
     rejected = next(r for r in rows if r["status"] == "rejected")
-    assert rejected["reason"] == "max_qty" and rejected["filled"] == 0 and rejected["quantity"] == 20000
+    assert rejected["reason"] == "insufficient_cash" and rejected["filled"] == 0 and rejected["quantity"] == 10000
     assert next(r for r in rows if r["order_id"] == kept)["status"] == "cancelled"
     assert client.get("/traders/99/fills").status_code == 404
 

@@ -70,6 +70,7 @@ for i in $(seq 1 24); do
   code="$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$API/orders" -H 'Content-Type: application/json' \
     -d "{\"trader_id\":0,\"symbol\":\"$symbol\",\"side\":\"$side\",\"price\":$price,\"qty\":1}")"
   [ "$code" = 200 ] && accepted=$((accepted + 1))
+  sleep 0.15  # the manual order endpoint allows 10 orders per second
 done
 check "at least 20 Kapinza orders accepted ($accepted)" test "$accepted" -ge 20
 sleep 10

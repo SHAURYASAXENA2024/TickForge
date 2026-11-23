@@ -1,6 +1,7 @@
 // Order ticket with a "review" step. Before the order is sent, the review shows what happened in
 // the past to a position like this one: return next to the worst fall (feature 14) and the spread of
 // outcomes over a holding period (feature 13). It comes from real Yahoo history, not from a forecast.
+import { orderProblem } from "@/lib/orderValidation";
 import { useEffect, useState } from "react";
 import { WhyChip } from "@/features/research/Papers";
 import { Badge, Panel, Segmented, buttonClass, inputClass, primaryButtonClass } from "@/components/ui";
@@ -132,8 +133,7 @@ export function OrderTicket({ symbol, onSymbol, online }: { symbol: string; onSy
 
   const qtyNumber = Number(qty);
   const priceCents = parseCents(price);
-  const qtyOk = Number.isInteger(qtyNumber) && qtyNumber >= 1 && qtyNumber <= 100_000;
-  const problem = !qtyOk ? "Quantity must be a whole number from 1 to 100,000." : priceCents === null ? "Price must be a positive amount like 189.50." : null;
+  const problem = orderProblem(symbol, qty, price);
 
   const send = async () => {
     if (priceCents === null) return;

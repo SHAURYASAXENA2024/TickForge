@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import concurrent.futures
+import json
 import logging
+import os
 import math
 import re
 import time
@@ -184,8 +186,70 @@ def _previous_close(symbol: str, fallback: float) -> float:
 
 
 # ---- public functions -------------------------------------------------------------------------------
+# ---- saved snapshot (offline safety) ------------------------------------------------------------------
+_saved: dict[str, dict] = {}
+_saved_loaded = False
+
+
+def _snapshot_path() -> str:
+    return os.path.join(os.environ.get("TICKFORGE_DATA_DIR", "."), "market_snapshot.json")
+
+
+def _load_saved() -> None:
+    global _saved_loaded
+    if _saved_loaded:
+        return
+    _saved_loaded = True
+    try:
+        with open(_snapshot_path(), encoding="utf-8") as fh:
+            _saved.update(json.load(fh))
+    except (OSError, ValueError):
+        pass
+
+
+def _save(key: str, data: dict) -> None:
+    _load_saved()
+    _saved[key] = data
+    try:
+        tmp = _snapshot_path() + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(_saved, fh)
+        os.replace(tmp, _snapshot_path())
+    except OSError:
+        log.warning("could not save the market snapshot")
+
+
+def _from_saved(key: str):
+    _load_saved()
+    data = _saved.get(key)
+    return {**data, "offline": True} if data else None
+
+
 def get_stock_data(symbol: str, range: str = "1d", interval: str = "5m"):
     symbol = _validate(symbol, range, interval)
+    skey = f"{symbol}|{range}|{interval}"
+    if os.environ.get("TICKFORGE_OFFLINE") == "1":
+        saved = _from_saved(skey)
+        if saved:
+            return saved
+        raise StockNotFound(f"No saved prices for {symbol} (offline mode)")
+    try:
+        data = _get_stock_data_live(symbol, range, interval)
+    except (InvalidSymbol, InvalidParameter, StockNotFound):
+        raise
+    except Exception:
+        saved = _from_saved(skey)
+        if saved:
+            log.warning("provider failed, serving the saved snapshot for %s", symbol)
+            return saved
+        raise
+    _load_saved()
+    if _saved.get(skey) is not data:  # the cache hands back the same object: write the file once per refresh
+        _save(skey, data)
+    return data
+
+
+def _get_stock_data_live(symbol: str, range: str = "1d", interval: str = "5m"):
     key = ("quote", symbol, range, interval)
     cached = cache.get(key)
     if cached is not None:
