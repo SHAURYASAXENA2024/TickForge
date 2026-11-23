@@ -90,12 +90,12 @@ export const RESULTS: ResultRow[] = [
   { metric: "Enqueue P99, 8 producers", baseline: 45319, tickforge: 26537, unit: "ns", experiment: "latency" },
 ];
 
-/** Correctness evidence from the test suite (./build.sh test), re-run on Linux (WSL2) on 3 Nov 2026. */
+/** Correctness evidence from the test suite (./build.sh test), re-run on Linux (WSL2) on 23 Nov 2026. */
 export const EVIDENCE: { title: string; result: string; how: string }[] = [
   { title: "Engine tests (ctest)", result: "PASS · 27 / 27", how: "Order book, WAL recovery, queue stress, engine end-to-end with kill -9, core pinning, the elastic ring, the WAL through io_uring and leader to follower replication. The queue, the elastic ring and the server with kill -9 also run under ThreadSanitizer and under AddressSanitizer." },
   { title: "Crash recovery", result: "PASS · same state hash after kill -9", how: "engine/tests/wal_recovery_test.cpp: replay equals live, file cut at every byte offset, bit-flip detection, writer killed with SIGKILL. The end-to-end test kills the server and compares the hash after restart." },
-  { title: "Database tests", result: "PASS · 28 Rust + 8 Python", how: "Memtable, SSTable (every byte flipped is caught), Bloom filter, compaction, and the TickForgeDB Python module." },
-  { title: "Service and frontend tests", result: "PASS · 58 + 28 + 32", how: "exchange-api pytest 58, market-data pytest 28 (Yahoo is mocked, no network), frontend typecheck and vitest 32." },
+  { title: "Database tests", result: "PASS · 33 Rust (16 unit, 14 database, 3 io_uring) + 11 Python", how: "Memtable, SSTable (every byte flipped is caught), Bloom filter, compaction, and the TickForgeDB Python module." },
+  { title: "Service and frontend tests", result: "PASS · 67 + 28 + 39", how: "exchange-api pytest 67 (1 skipped), market-data pytest 28 (Yahoo is mocked, no network), frontend typecheck and vitest 39." },
 ];
 
 // ---- 09 Limitations and future work --------------------------------------------------------------------

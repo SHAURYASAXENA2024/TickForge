@@ -100,3 +100,9 @@ Work branch: `recovery-demo` (base: tag `v3-stable`, branch `completion`).
 ## Final gate
 
 `./build.sh test` all green (27 ctest, Rust 16+14+3, binding, exchange-api 67 passed 1 skipped, market-data 28, frontend 39). `./build.sh kill9`: 20000 orders, last_seq 20000, hash `69a6a28ee55e622b` before and after, identical to the baseline.
+
+# Final polish (branch final-polish)
+
+| Phase | Time IST | Status | Evidence |
+|---|---|---|---|
+| A | 15:50 | done | tag v-pre-final pushed, backup in ~/backups, gate green (ctest, Rust, binding, pytest, vitest), kill9 hash 69a6a28ee55e622b before and after, verify_recovery_demo passed |

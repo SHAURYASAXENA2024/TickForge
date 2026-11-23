@@ -54,9 +54,9 @@ Prices are integer cents everywhere except the screen. See [docs/ARCHITECTURE.md
 
 | Part | Status | Evidence |
 |---|---|---|
-| exchange-api: real buyer and seller per fill, integer-cent cash and P&L, live book, trade persistence, reconnect, REST and WebSockets | built, verified against a fake engine | `services/exchange-api/tests` (17 tests) |
-| market-data: cached, timeouts on every Yahoo call, Journey analytics | built, verified (no network in tests) | `services/market-data/tests` (19 tests) |
-| Frontend: dashboard with live engine data, order ticket, market data, Journey, *How'z that!* | built, verified | typecheck, `vite build`, 32 tests: telemetry parser, cent formatting, behavioural calculations, page smoke test |
+| exchange-api: real buyer and seller per fill, integer-cent cash and P&L, live book, trade persistence, reconnect, REST and WebSockets | built, verified against a fake engine | `services/exchange-api/tests` (67 tests, 1 skipped) |
+| market-data: cached, timeouts on every Yahoo call, Journey analytics | built, verified (no network in tests) | `services/market-data/tests` (28 tests) |
+| Frontend: dashboard with live engine data, order ticket, market data, Journey, *How'z that!* | built, verified | typecheck, `vite build`, 39 tests: telemetry parser, cent formatting, behavioural calculations, page smoke test |
 | Behavioural features: daily vs long-term window, volatility-scaled axis, scenario preview before an order, return next to worst fall | built | calculations unit-tested; see below |
 | `build.sh` | built, verified | `./build.sh test` passes all suites; the full stack was started with the real engine and database, and an order placed through the API matched in the engine, was attributed to the right two traders and appeared in the stored history |
 | C++ engine: TCP server, price-time matching, cancel, risk checks, integer cents | built, verified | `ctest` (27 tests, also covering the optional features below) incl. an end-to-end test over TCP |
