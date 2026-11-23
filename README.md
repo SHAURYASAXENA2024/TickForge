@@ -27,6 +27,10 @@ That checks your tools (and prints the install command for anything missing), bu
 | `./build.sh kill9 [engine flags]` | crash check: send orders, `kill -9` the engine, restart it, compare state hashes |
 | `./build.sh clean` | delete build output, `.venv`, `node_modules` and runtime data (`.run/`) |
 
+**Test:** `./build.sh test` (about 1 minute; all suites must print PASS). **Demo:** follow [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md). Claims and their evidence: [docs/CLAIMS_AUDIT.md](docs/CLAIMS_AUDIT.md). Limits: [docs/LIMITATIONS.md](docs/LIMITATIONS.md). Viva notes: [docs/VIVA_QA.md](docs/VIVA_QA.md).
+
+Optional environment flags (the default `./build.sh` needs none): `TICKFORGE_DEMO=1` enables the crash recovery demo and the engine supervisor; `TICKFORGE_OFFLINE=1` makes market-data serve its saved prices instead of calling Yahoo; `TICKFORGE_REFERENCE=snapshot` makes exchange-api use saved reference prices.
+
 ### Crash recovery demo
 
 ```bash

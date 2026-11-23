@@ -1,9 +1,19 @@
 # Architecture
 
-```
-Browser :8443 ──┬── exchange-api :8001 ── TCP 127.0.0.1:9100 ── engine
-                │        └── tickforge_db (Rust, in-process)
-                └── market-data :8000 ── Yahoo Finance
+```mermaid
+flowchart LR
+  subgraph Engine["C++ engine :9100"]
+    P["Producers: one thread per connection"] --> Q["Lock-free MPSC queue"]
+    Q --> M["Matching thread: price-time priority, owns all order books"]
+    P --> W["WAL: written before the ack"]
+  end
+  EA["exchange-api :8001 (Python)"] -- "TCP, JSON lines" --> P
+  M -- "fills" --> EA
+  EA --> DB[("tickforge_db: Rust LSM tree, in-process")]
+  MD["market-data :8000 (Python)"] -- "quotes, cached" --> Y(("Yahoo Finance"))
+  FE["Frontend :8443 (React)"] --> EA
+  FE --> MD
+  EA -. "reference prices" .-> MD
 ```
 
 The exact messages, file formats and API are in [CONTRACTS.md](CONTRACTS.md). This page explains how the parts work together.
