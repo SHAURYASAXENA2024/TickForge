@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisco
 from pydantic import BaseModel
 
 from app.ledger import compute_activity
+from app.report import WINDOWS_MS, build_report
 from app.engine_client import EngineDown, Rejected
 from app.symbols import ALL_SYMBOLS, DEFAULT_SYMBOL, SYMBOL_IDS
 from app.traders import MANUAL_ID, trader_name
@@ -240,6 +241,22 @@ async def trader_activity(trader_id: int, request: Request, symbol: str = DEFAUL
     trades = await ex.db(ex.store.trades_by_trader, trader_id, 1_000_000)
     fills = [{**t, "side": "BUY" if t["buyer_id"] == trader_id else "SELL"} for t in trades if t["symbol"] == symbol]
     return {"trader_id": trader_id, "symbol": symbol, **compute_activity(fills, ex.prices.get(symbol))}
+
+
+@router.get("/report/summary")
+async def report_summary(request: Request, trader: str = "all", window: str = "session"):
+    """Statistics for the Report tab, computed from the orders table and the trades in the database.
+    trader: all, kapinza or a trader id (1 to 25). window: session, 5m or 1m. All values are simulated."""
+    ex = _exchange(request)
+    if window != "session" and window not in WINDOWS_MS:
+        raise HTTPException(status_code=422, detail="window must be session, 5m or 1m")
+    if trader not in ("all", "kapinza"):
+        if not trader.isdigit() or ex.account(int(trader)) is None:
+            raise HTTPException(status_code=404, detail="no such trader")
+    now_ms = int(time.time() * 1000)
+    orders = await ex.db(ex.store.list_orders, None, 1_000_000)
+    trades = await ex.db(ex.store.range, 0, now_ms + 1, None)
+    return build_report(orders, trades, {t.trader_id: t.strategy for t in ex.traders}, trader, window, now_ms)
 
 
 @router.get("/reference")

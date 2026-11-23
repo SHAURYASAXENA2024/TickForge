@@ -237,3 +237,4 @@ Kernel-bypass networking (AF_XDP) is not part of this project: it is not built, 
 - Phase C: tests that used a 20,000-share order to get an engine reject now use an unaffordable BUY (insufficient_cash), because 20,000 shares is refused earlier with 422.
 - Phase C: scripts/verify_recovery_demo.sh sleeps 0.15 s between its 24 orders to stay under the rate limit.
 - Phase C: panels already had loading, empty and error states (checked EngineSection, ExchangeSection, MyOrders, TradingActivity, OrderTicket); no change needed.
+- Phase E: the Report is a section of the dashboard page (nav item "Report", lazy loaded), like the other tabs. Fill rate = orders with a fill / orders; symbol split counts orders; "open" is added as a fifth order outcome so the shares add up; reports with fewer than 10 fills show "Place more orders to see this report". "Download report" opens a plain print page built from the same reply.

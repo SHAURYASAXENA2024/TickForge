@@ -1,4 +1,5 @@
 // The dashboard page: header, simulation controls and the sections (engine, market, exchange, journey).
+import { lazy, Suspense } from "react";
 import { Icon } from "@/components/Icon";
 import { Badge, Panel, Segmented, buttonClass } from "@/components/ui";
 import { ExchangeSection } from "@/features/exchange/ExchangeSection";
@@ -11,11 +12,14 @@ import { useTheme } from "@/lib/theme";
 import { ConnectionBanner } from "./ConnectionBanner";
 import { EngineSection } from "./EngineSection";
 
+const ReportSection = lazy(() => import("@/features/report/ReportSection"));
+
 const NAV = [
   { id: "engine", label: "Engine" },
   { id: "market", label: "Market" },
   { id: "journey", label: "Journey" },
   { id: "exchange", label: "Exchange" },
+  { id: "report", label: "Report" },
   { id: "status", label: "Status" },
 ];
 const NAV_IDS = NAV.map((n) => n.id);
@@ -106,6 +110,13 @@ export default function Dashboard() {
         <EngineSection stats={stats} linkLive={live} health={health} trades={trades} />
         <MarketSection />
         <ExchangeSection online={online} health={health} traders={traders} trades={trades} />
+
+        <section id="report" className="scroll-mt-20 py-8">
+          <h2 className="text-xl font-semibold text-strong">Report</h2>
+          <Suspense fallback={<p className="py-4 text-sm text-muted">Loading the report…</p>}>
+            <ReportSection />
+          </Suspense>
+        </section>
 
         <section id="status" className="scroll-mt-20 space-y-4 py-8">
           <h2 className="text-xl font-semibold text-strong">Status</h2>

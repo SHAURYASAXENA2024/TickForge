@@ -40,3 +40,10 @@ page: it is labelled as such where it appears and nothing in it pretends to be l
 
 ## Offline mode
 `TICKFORGE_OFFLINE=1` (market-data) serves the last saved quotes from `market_snapshot.json` in the data directory instead of calling Yahoo. The same snapshot is used when a Yahoo call fails. Replies carry `"offline": true` and the UI shows "Using saved prices (offline)". `TICKFORGE_DEMO=1` is the crash recovery demo switch (see README).
+
+## Report tab
+| Panel | What it shows | Where it comes from | Updates |
+|---|---|---|---|
+| Report (tiles, six donut charts, Kapinza profile, orders per second) | counts and shares of orders, fills, outcomes, strategies, symbols, profit split, rejection reasons | `GET /report/summary?trader=<all\|kapinza\|id>&window=<session\|5m\|1m>`, computed on request from the orders table and the trades in the database (`services/exchange-api/app/report.py`); nothing is stored or hardcoded; simulated | every 2 s while the page is visible |
+
+Definitions: fill rate is orders with at least one fill divided by orders; the symbol split counts orders; the strategy mix counts each side of every fill; traders in profit uses realized P&L (FIFO) of the fills inside the window, for traders with at least one fill; win rate is closing fills with a profit divided by closing fills. The window uses real order and trade timestamps; "session" starts when exchange-api starts.

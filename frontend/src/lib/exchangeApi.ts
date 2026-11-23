@@ -1,7 +1,7 @@
 // REST and WebSocket helpers for exchange-api (port 8001). Prices are integer cents.
 import { useEffect, useState } from "react";
 
-const EXCHANGE_URL = (import.meta.env.VITE_EXCHANGE_API_URL || "http://127.0.0.1:8001").replace(/\/$/, "");
+export const EXCHANGE_URL = (import.meta.env.VITE_EXCHANGE_API_URL || "http://127.0.0.1:8001").replace(/\/$/, "");
 const EXCHANGE_WS = EXCHANGE_URL.replace(/^http/, "ws");
 
 export const EXCHANGE_SYMBOLS = ["AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "GOOGL", "META", "JPM", "BRK-B", "AMD"] as const;
