@@ -5,6 +5,7 @@ import { DASH, dollars, fmtInt, fmtUs } from "@/lib/format";
 import { EXCHANGE_SYMBOLS, referenceLabel, useOrderBook, useReference, type ExchangeHealth, type LiveTrade } from "@/lib/exchangeApi";
 import type { EngineStats } from "@/lib/telemetry";
 import { Badge, Notice, Panel, Stat } from "@/components/ui";
+import { AlertsCard } from "./AlertsCard";
 import { CrashRecovery } from "./CrashRecovery";
 import { MyOrders } from "./MyOrders";
 import { OrderTicket } from "./OrderTicket";
@@ -188,6 +189,7 @@ export function EngineSection({ stats, linkLive, health, trades }: Props) {
       <MyOrders online={health?.engine === "connected"} />
       <OrderPath stats={stats} health={health} />
       <LatencyPanel stats={stats} linkLive={linkLive} />
+      <AlertsCard />
       <CrashRecovery />
     </section>
   );

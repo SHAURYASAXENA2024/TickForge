@@ -13,3 +13,4 @@
 - **Crash recovery demo** needs `TICKFORGE_DEMO=1` and blocks order entry while it runs.
 - **Rate limit** is per client address and only on manual orders; the order book is per symbol, 10 symbols.
 - **Benchmarks** come from one WSL2 laptop, unpinned threads, and will differ elsewhere.
+- **No database triggers.** Alerts are evaluated in exchange-api on every trade and tick, and saved to a JSON file; they are not an LSM-level trigger mechanism.
