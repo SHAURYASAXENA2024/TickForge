@@ -99,3 +99,52 @@ def test_orders_balances_and_locks_survive_kill_9(tmp_path):
     finally:
         engine.kill()
         engine.wait()
+
+
+def engine_state_hash(port):
+    import json
+    import socket
+    with socket.create_connection(("127.0.0.1", port), timeout=2) as s:
+        s.sendall(b'{"type":"command","name":"state_hash"}\n')
+        buf = b""
+        while not buf.endswith(b"\n"):
+            buf += s.recv(4096)
+    return json.loads(buf)
+
+
+REPLAY = os.path.join(os.path.dirname(ENGINE), "wal_replay") if ENGINE else ""
+
+
+@pytest.mark.skipif(not os.path.exists(REPLAY), reason="needs the wal_replay tool next to engine_server")
+def test_replay_at_latest_sequence_matches_the_live_engine(tmp_path):
+    port = free_port()
+    wal = tmp_path / "engine.wal"
+    engine = start_engine(port, wal)
+    try:
+        settings = Settings(engine_port=port, data_dir=str(tmp_path / "data"), memory_db=False, traders_start_running=False,
+                            tick_seconds=0.1, reconnect_seconds=0.1, reference_snapshot=TEST_SNAPSHOT,
+                            replay_bin=REPLAY, wal_path=str(wal))
+        with TestClient(create_app(settings)) as client:
+            wait_for(lambda: client.get("/health").json()["engine"] == "connected")
+            order(client, 3, "SELL", 18900, 100)
+            order(client, 0, "BUY", 19000, 60)
+            order(client, 0, "BUY", 18500, 20)
+            order(client, 4, "SELL", 21000, 5)
+            wait_for(lambda: len(client.get("/traders/25/fills").json()["fills"]) == 1)
+            time.sleep(0.5)
+            size_before = os.path.getsize(wal)
+            live = engine_state_hash(port)
+            latest = client.get("/replay?symbol=AAPL").json()
+            assert latest["state_hash"] == live["hash"] and latest["seq"] == live["last_seq"]
+            assert latest["trades"] == 1
+            assert latest["bids"][0] == [18500, 20] and latest["asks"][0][0] == 18900 and len(latest["bids"]) <= 5
+            start = client.get("/replay?symbol=AAPL&seq=0").json()
+            assert start["seq"] == 0 and start["trades"] == 0 and start["asks"] == [] and start["bids"] == []
+            assert start["state_hash"] != latest["state_hash"]
+            middle = client.get(f"/replay?symbol=AAPL&seq={latest['seq'] - 2}").json()
+            assert middle["seq"] <= latest["seq"] - 2 and middle["newest_seq"] == latest["seq"]
+            assert os.path.getsize(wal) == size_before          # the live WAL was only read
+            assert client.get("/replay?symbol=NOPE").status_code == 404
+            assert client.get("/replay?seq=-1").status_code == 422
+    finally:
+        engine.kill()

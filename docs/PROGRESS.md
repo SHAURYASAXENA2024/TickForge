@@ -111,3 +111,4 @@ Work branch: `recovery-demo` (base: tag `v3-stable`, branch `completion`).
 | D | 16:20 | done | docs/ARCHITECTURE.md (Mermaid), VIVA_QA.md (25), DEMO_SCRIPT.md, LIMITATIONS.md, README top section; docs only |
 | E | 16:00 | done | gate green (exchange-api 90 passed 1 skipped, vitest 53), kill9 hash unchanged, verify demo passed; live check of /report/summary on the real stack; /report/summary, report.py (9 tests), Report tab (7 vitest) |
 | F | 16:05 | done | price alerts in exchange-api (12 tests) and Alerts card with toast (4 vitest); gate green: exchange-api 102 passed 1 skipped, vitest 57; kill9 hash unchanged; verify demo passed |
+| G | 16:12 | done | wal_replay tool on a copy of the WAL (engine replay code unmodified), /replay, slider in the Crash recovery area; gate green: ctest 28, exchange-api 104 passed 1 skipped, vitest 59; kill9 hash unchanged; verify demo passed; live /replay checked on the real stack |

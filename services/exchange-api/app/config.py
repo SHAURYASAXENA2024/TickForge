@@ -27,6 +27,10 @@ class Settings:
     # Crash recovery demo (see app/recovery.py): off unless TICKFORGE_DEMO=1
     demo_enabled: bool = False
 
+    # WAL replay at a sequence (see app/replay.py): the wal_replay tool, and the WAL it copies (default: <data dir>/engine.wal)
+    replay_bin: str | None = None
+    wal_path: str | None = None
+
     # Knobs for tests; not read from the environment.
     traders_start_running: bool = True
     orders_per_second: float = 4.0  # virtual-trader order rate at speed 1
@@ -46,4 +50,5 @@ class Settings:
             stop_orders=env.get("TICKFORGE_STOP_ORDERS", "1") != "0",
             demo_enabled=env.get("TICKFORGE_DEMO", "") == "1",
             market_data_url=env.get("TICKFORGE_MARKET_DATA_URL", "http://127.0.0.1:8000"),
+            replay_bin=env.get("TICKFORGE_REPLAY_BIN") or None,
         )

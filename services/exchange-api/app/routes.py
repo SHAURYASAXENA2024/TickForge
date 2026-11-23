@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from app.alerts import AlertError
 from app.ledger import compute_activity
+from app.replay import ReplayUnavailable, replay_at
 from app.report import WINDOWS_MS, build_report
 from app.engine_client import EngineDown, Rejected
 from app.symbols import ALL_SYMBOLS, DEFAULT_SYMBOL, SYMBOL_IDS
@@ -269,6 +270,19 @@ async def delete_alert(alert_id: int, request: Request):
     if not _exchange(request).alerts.remove(alert_id):
         raise HTTPException(status_code=404, detail="no such alert")
     return {"alert_id": alert_id}
+
+
+@router.get("/replay")
+async def get_replay(request: Request, symbol: str = DEFAULT_SYMBOL, seq: int | None = None):
+    """The top 5 book levels, trade count and state hash of the exchange at WAL sequence `seq` (the
+    newest when left out). Computed from a copy of the WAL by a separate process, never from the live engine."""
+    _check_symbol(symbol)
+    if seq is not None and seq < 0:
+        raise HTTPException(status_code=422, detail="seq must not be negative")
+    try:
+        return await replay_at(_exchange(request).settings, seq, symbol)
+    except ReplayUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
 
 
 @router.get("/report/summary")

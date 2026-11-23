@@ -237,7 +237,7 @@ run_stack() {
   echo "engine          127.0.0.1:$ENGINE_PORT"
 
   start exchange-api "$ROOT/services/exchange-api" env \
-    TICKFORGE_ENGINE_PORT="$ENGINE_PORT" TICKFORGE_DATA_DIR="$DATA" \
+    TICKFORGE_ENGINE_PORT="$ENGINE_PORT" TICKFORGE_DATA_DIR="$DATA" TICKFORGE_REPLAY_BIN="$ENGINE_BUILD/wal_replay" \
     "$PY" -m uvicorn app.main:app --host 127.0.0.1 --port "$API_PORT"
   wait_until exchange-api "$LAST_PID" http_ok "http://127.0.0.1:$API_PORT/health"
   echo "exchange-api    http://127.0.0.1:$API_PORT"

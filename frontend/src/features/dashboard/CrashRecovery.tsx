@@ -1,6 +1,7 @@
 // "Crash recovery": live write-ahead-log numbers, and a button that kills the engine with SIGKILL and
 // shows whether the log brought back exactly the same state. Everything shown comes from
 // GET /recovery/status and the answer of POST /recovery/crash-demo; nothing is typed in here.
+import { ReplayScrubber } from "./ReplayScrubber";
 import { useCallback, useEffect, useState } from "react";
 import { fmtInt } from "@/lib/format";
 import { Notice, Panel, buttonClass, primaryButtonClass } from "@/components/ui";
@@ -257,7 +258,10 @@ export function CrashRecovery() {
   };
 
   return (
-    <RecoveryView status={status} error={error} result={result} busy={busy} confirming={confirming}
-      onAsk={() => setConfirming(true)} onConfirm={() => void crash()} onCancel={() => setConfirming(false)} />
+    <>
+      <RecoveryView status={status} error={error} result={result} busy={busy} confirming={confirming}
+        onAsk={() => setConfirming(true)} onConfirm={() => void crash()} onCancel={() => setConfirming(false)} />
+      <ReplayScrubber />
+    </>
   );
 }

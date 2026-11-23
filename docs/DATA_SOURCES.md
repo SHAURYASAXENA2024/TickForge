@@ -47,3 +47,10 @@ page: it is labelled as such where it appears and nothing in it pretends to be l
 | Report (tiles, six donut charts, Kapinza profile, orders per second) | counts and shares of orders, fills, outcomes, strategies, symbols, profit split, rejection reasons | `GET /report/summary?trader=<all\|kapinza\|id>&window=<session\|5m\|1m>`, computed on request from the orders table and the trades in the database (`services/exchange-api/app/report.py`); nothing is stored or hardcoded; simulated | every 2 s while the page is visible |
 
 Definitions: fill rate is orders with at least one fill divided by orders; the symbol split counts orders; the strategy mix counts each side of every fill; traders in profit uses realized P&L (FIFO) of the fills inside the window, for traders with at least one fill; win rate is closing fills with a profit divided by closing fills. The window uses real order and trade timestamps; "session" starts when exchange-api starts.
+
+## Replay at a sequence
+| Panel | What it shows | Where it comes from | Updates |
+|---|---|---|---|
+| Replay the log (slider in the Crash recovery area) | top 5 bids and asks, trade count and state hash at WAL sequence N | `GET /replay?seq=N&symbol=X`: exchange-api copies `engine.wal` to a temporary file and runs `wal_replay` (the engine's own replay code) on the copy in a separate process; the live engine and live WAL are not touched | when the slider moves (250 ms debounce) |
+
+Replaying to the newest sequence gives the same state hash as the live engine (`services/exchange-api/tests/test_real_engine.py`, `engine/tests/wal_replay_test.cpp`). The tool assumes the default `./build.sh` engine settings (accounts on, self-trade prevention on, 500 shares of 10 symbols, $1,000,000 start cash); an engine started with other `--start-*` flags would give a different hash.
