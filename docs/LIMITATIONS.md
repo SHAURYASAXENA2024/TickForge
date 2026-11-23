@@ -14,3 +14,4 @@
 - **Rate limit** is per client address and only on manual orders; the order book is per symbol, 10 symbols.
 - **Benchmarks** come from one WSL2 laptop, unpinned threads, and will differ elsewhere.
 - **No database triggers.** Alerts are evaluated in exchange-api on every trade and tick, and saved to a JSON file; they are not an LSM-level trigger mechanism.
+- **Replay uses default engine settings.** `wal_replay` replays with the default account and self-trade settings; an engine started with other `--start-*` flags would not give matching hashes.

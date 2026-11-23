@@ -133,3 +133,10 @@ target_compile_definitions(engine_bench PRIVATE
 # Whole-server benchmark, used to compare engine flags under the same load.
 add_executable(server_bench bench/server_bench.cpp)
 target_link_libraries(server_bench PRIVATE Threads::Threads)
+
+# wal_replay: read-only replay of a copy of the WAL to a sequence number (used by exchange-api /replay).
+add_executable(wal_replay tools/wal_replay.cpp)
+target_link_libraries(wal_replay PRIVATE tickforge_wal)
+add_executable(wal_replay_test tests/wal_replay_test.cpp)
+target_link_libraries(wal_replay_test PRIVATE tickforge_wal)
+add_test(NAME wal_replay_test COMMAND wal_replay_test $<TARGET_FILE:wal_replay>)
