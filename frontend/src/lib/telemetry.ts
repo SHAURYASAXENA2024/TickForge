@@ -39,7 +39,11 @@ export type TelemetryCommand =
   | { cmd: "speed"; value: 1 | 10 | 100 }
   | { cmd: "order"; side: "BUY" | "SELL"; qty: number; price: number };
 
-export const TELEMETRY_URL: string = import.meta.env.VITE_TELEMETRY_URL || "ws://127.0.0.1:8001/ws/telemetry";
+export const TELEMETRY_URL =
+  import.meta.env.VITE_TELEMETRY_URL ||
+  (import.meta.env.PROD
+    ? `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/api/exchange/ws/telemetry`
+    : "ws://127.0.0.1:8001/ws/telemetry");
 
 const num = (value: unknown): number => (typeof value === "number" && Number.isFinite(value) ? value : 0);
 const numArray = (value: unknown): number[] => (Array.isArray(value) ? value.map(num) : []);

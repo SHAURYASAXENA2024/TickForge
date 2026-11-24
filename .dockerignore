@@ -1,0 +1,8 @@
+.git
+.venv
+node_modules
+.run
+target
+build
+dist
+*.log

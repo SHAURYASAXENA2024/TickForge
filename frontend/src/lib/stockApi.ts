@@ -35,7 +35,10 @@ export class StockApiError extends Error {
   }
 }
 
-const API_URL = (import.meta.env.VITE_STOCK_API_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
+const API_URL = (
+  import.meta.env.VITE_STOCK_API_URL ||
+  (import.meta.env.PROD ? window.location.origin : "http://127.0.0.1:8000")
+).replace(/\/$/, "");
 
 const isNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 const isString = (value: unknown): value is string => typeof value === "string";
