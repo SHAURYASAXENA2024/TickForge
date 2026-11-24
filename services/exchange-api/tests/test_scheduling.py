@@ -54,3 +54,26 @@ def test_stop_validation_and_cancel(client):
     sid = client.post("/stops", json={**bad, "stop_price": 5}).json()["stop_id"]
     assert client.delete(f"/stops/{sid}").status_code == 200
     assert client.delete(f"/stops/{sid}").status_code == 404
+
+
+def test_round_robin_peek_does_not_advance_and_turns_counts():
+    rr = RoundRobin([1, 2, 3])
+    assert (rr.peek(), rr.peek(), rr.turns) == (1, 1, 0)
+    assert rr.take() == 1 and rr.turns == 1
+    assert rr.peek() == 2 and rr.take() == 2 and rr.turns == 2
+
+
+def test_next_up_skips_paused_and_snapshot_carries_dispatch():
+    ex = Exchange(Settings(memory_db=True, reference_snapshot=TEST_SNAPSHOT, dispatch="roundrobin"))
+    assert ex.next_up().trader_id == 1
+    ex.trader_state[1] = "paused"
+    assert ex.next_up().trader_id == 2
+    assert ex.round_robin.turns == 0                    # peeking never advances
+    d = ex.traders_snapshot()["dispatch"]
+    assert d == {"mode": "roundrobin", "next_trader_id": 2, "turns": 0}
+
+
+def test_next_up_is_none_in_random_mode():
+    ex = Exchange(Settings(memory_db=True, reference_snapshot=TEST_SNAPSHOT, dispatch="random"))
+    assert ex.next_up() is None
+    assert ex.traders_snapshot()["dispatch"]["next_trader_id"] is None

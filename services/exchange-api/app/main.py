@@ -353,6 +353,16 @@ class Exchange:
                 return trader
         return None
 
+    def next_up(self):
+        """The virtual trader _next_trader would pick next in round robin, without advancing. None in random mode."""
+        if self.settings.dispatch != "roundrobin":
+            return None
+        for i in range(len(self.traders)):
+            trader = self.traders[(self.round_robin._next + i) % len(self.traders)]
+            if self.trader_state.get(trader.trader_id, "running") == "running":
+                return trader
+        return None
+
     # ---- reference prices -----------------------------------------------------------------------
     async def _reference_loop(self) -> None:
         """Read live prices every `reference_refresh_seconds`, and make sure the engine has them."""
@@ -449,7 +459,10 @@ class Exchange:
         def with_state(t):
             return {**view(t), "state": self.trader_state.get(t.trader_id, "running")}
         return {"traders": [with_state(t) for t in self.traders], "manual": view(self.manual),
-                "symbols": dict(self.symbol_state)}
+                "symbols": dict(self.symbol_state),
+                "dispatch": {"mode": self.settings.dispatch,
+                             "next_trader_id": (nxt.trader_id if (nxt := self.next_up()) else None),
+                             "turns": self.round_robin.turns}}
 
     # ---- telemetry ----------------------------------------------------------------------------
     def status_message(self) -> dict:

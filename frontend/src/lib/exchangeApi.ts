@@ -34,6 +34,9 @@ export type Trader = {
   state?: ControlState; // "running" unless this trader was paused or stopped
 };
 
+/** Which virtual trader sends the next order. Absent from an older exchange-api. */
+export type DispatchInfo = { mode: string; next_trader_id: number | null; turns: number };
+
 export type ControlState = "running" | "paused" | "stopped";
 export type ControlAction = "pause" | "resume" | "stop";
 
@@ -106,6 +109,7 @@ async function exchangeFetch<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const getExchangeHealth = () => exchangeFetch<ExchangeHealth>("/health");
 export const getTraders = async () => (await exchangeFetch<{ traders: Trader[] }>("/traders")).traders;
+export const getDispatch = async () => (await exchangeFetch<{ dispatch?: DispatchInfo }>("/traders")).dispatch;
 export const getRecentTrades = async (limit = 50) => (await exchangeFetch<{ trades: LiveTrade[] }>(`/trades?limit=${limit}`)).trades;
 export const getOrders = async (traderId: number, limit = 100) =>
   (await exchangeFetch<{ orders: StoredOrder[] }>(`/orders?trader_id=${traderId}&limit=${limit}`)).orders;
@@ -190,10 +194,10 @@ export function watchTrades(onTrade: (trade: LiveTrade) => void, onHistory: (tra
   });
 }
 
-export function watchTraders(onUpdate: (traders: Trader[]) => void): () => void {
+export function watchTraders(onUpdate: (traders: Trader[], dispatch?: DispatchInfo) => void): () => void {
   return watch("/ws/traders", (data) => {
-    const d = data as { traders?: Trader[] };
-    if (Array.isArray(d.traders)) onUpdate(d.traders);
+    const d = data as { traders?: Trader[]; dispatch?: DispatchInfo };
+    if (Array.isArray(d.traders)) onUpdate(d.traders, d.dispatch);
   });
 }
 

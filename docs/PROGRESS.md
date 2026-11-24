@@ -114,3 +114,22 @@ Work branch: `recovery-demo` (base: tag `v3-stable`, branch `completion`).
 | G | 16:12 | done | wal_replay tool on a copy of the WAL (engine replay code unmodified), /replay, slider in the Crash recovery area; gate green: ctest 28, exchange-api 104 passed 1 skipped, vitest 59; kill9 hash unchanged; verify demo passed; live /replay checked on the real stack |
 | H | 16:25 | done | three fresh-clone runs passed, attribution and path and secret sweeps run (five older pushed commits keep a trailer, see DECISIONS), SUBMISSION.md, v-final |
 FINAL_ALL_DONE
+
+# Trader view (branch trader-view, 24 Nov 2026)
+
+Baseline before: frontend typecheck clean, vitest 59, exchange-api pytest 101 passed 4 skipped.
+
+| Change | Status | Evidence |
+|---|---|---|
+| 1 View orders of any trader | done | dropdown in MyOrders.tsx (Kapinza first), read only for virtual traders, stale answers ignored; 6 new vitest |
+| 2 Round robin "Next up" | done | RoundRobin.peek and turns, Exchange.next_up, `dispatch` in the traders snapshot; line and badge in ExchangeSection; 3 new pytest, 3 new vitest |
+
+Decisions (written here because docs/DECISIONS.md is not on the allowlist):
+- Dashboard.tsx is not on the allowlist, so the dispatch field reaches ExchangeSection through a small store in useExchange.ts (useDispatchInfo) instead of a new prop.
+- No DOM test library exists and none may be added, so the tests render with renderToString; MyOrders was split into a loader part and a pure OrdersPanel to make that possible.
+- peek/next_up read the cycle position and never call take(), so dispatch is unchanged.
+- The snapshot field is additive; existing fields are untouched.
+- No attribution trailer in commits, as the job requires.
+- The job asked for DECISIONS.md and also forbade editing docs other than two; the scope rule won.
+
+Files changed: see the list in the final report (checked against the allowlist with `git diff --name-only completion`).
