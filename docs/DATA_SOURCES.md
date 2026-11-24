@@ -54,3 +54,9 @@ Definitions: fill rate is orders with at least one fill divided by orders; the s
 | Replay the log (slider in the Crash recovery area) | top 5 bids and asks, trade count and state hash at WAL sequence N | `GET /replay?seq=N&symbol=X`: exchange-api copies `engine.wal` to a temporary file and runs `wal_replay` (the engine's own replay code) on the copy in a separate process; the live engine and live WAL are not touched | when the slider moves (250 ms debounce) |
 
 Replaying to the newest sequence gives the same state hash as the live engine (`services/exchange-api/tests/test_real_engine.py`, `engine/tests/wal_replay_test.cpp`). The tool assumes the default `./build.sh` engine settings (accounts on, self-trade prevention on, 500 shares of 10 symbols, $1,000,000 start cash); an engine started with other `--start-*` flags would give a different hash.
+
+## Orders of any trader (Engine tab, "My orders")
+A dropdown picks Kapinza (default) or any of the 24 virtual traders. Orders come from `GET /orders?trader_id=N` and fills from `GET /traders/{id}/fills`, both read from the database through exchange-api. A virtual trader is shown read only. The rows are fetched again every 2 seconds; an answer that arrives late for a previously selected trader is ignored.
+
+## Dispatch line and "Next up" (Exchange tab, "Virtual traders")
+Read from the `dispatch` field of `GET /traders` and of the `/ws/traders` push: `{mode, next_trader_id, turns}`. In round robin mode the next trader is the next one in the cycle that is running (paused and stopped traders are skipped); reading it does not advance the cycle. In random mode `next_trader_id` is null. An older exchange-api without the field shows nothing extra.

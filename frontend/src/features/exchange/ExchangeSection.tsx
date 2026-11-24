@@ -2,7 +2,8 @@
 import { Notice, Panel } from "@/components/ui";
 import { DASH, dollars, fmtInt, fmtReservedShares, signedDollars } from "@/lib/format";
 import { useCallback, useEffect, useState } from "react";
-import { EXCHANGE_SYMBOLS, controlSymbol, controlTrader, getSymbolStates, type ControlAction, type ControlState, type ExchangeHealth, type LiveTrade, type Trader } from "@/lib/exchangeApi";
+import { EXCHANGE_SYMBOLS, controlSymbol, controlTrader, getSymbolStates, type ControlAction, type DispatchInfo, type ControlState, type ExchangeHealth, type LiveTrade, type Trader } from "@/lib/exchangeApi";
+import { useDispatchInfo } from "./useExchange";
 import { buttonClass } from "@/components/ui";
 
 const STATE_TEXT: Record<ControlState, string> = { running: "Running", paused: "Paused", stopped: "Stopped" };
@@ -56,7 +57,17 @@ type Props = { online: boolean; health: ExchangeHealth | null; traders: Trader[]
 
 const timeOf = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
+function dispatchLine(d: DispatchInfo | undefined, traders: Trader[]): string | null {
+  if (!d) return null;
+  if (d.mode !== "roundrobin") return "Dispatch: random";
+  const next = traders.find((t) => t.trader_id === d.next_trader_id);
+  return `Dispatch: round robin, turn ${d.turns}${next ? `, next up: ${next.name}` : ""}`;
+}
+
 function TradersPanel({ online, traders }: { online: boolean; traders: Trader[] }) {
+  const dispatch = useDispatchInfo();
+  const line = dispatchLine(dispatch, traders);
+  const nextId = dispatch?.mode === "roundrobin" ? dispatch.next_trader_id : null;
   return (
     <Panel
       title="Virtual traders"
@@ -66,6 +77,7 @@ function TradersPanel({ online, traders }: { online: boolean; traders: Trader[] 
         <Notice title="No trader data">{online ? "Waiting for the first update." : "exchange-api is not reachable. Start the stack with ./build.sh."}</Notice>
       ) : (
         <div className="max-h-[28rem] overflow-auto">
+          {line && <p className="px-4 pt-2 text-xs text-muted" data-testid="dispatch-line">{line}</p>}
           <table className="w-full min-w-[58rem] text-sm">
             <thead className="sticky top-0 bg-surface text-xs text-muted">
               <tr className="border-b border-line">
@@ -83,7 +95,7 @@ function TradersPanel({ online, traders }: { online: boolean; traders: Trader[] 
             <tbody>
               {traders.map((t) => (
                 <tr key={t.trader_id} className="border-b border-line last:border-0 hover:bg-raised">
-                  <td className="px-4 py-1.5"><span className="font-mono text-faint">{String(t.trader_id).padStart(2, "0")}</span> <span className="text-strong">{t.name}</span></td>
+                  <td className="px-4 py-1.5"><span className="font-mono text-faint">{String(t.trader_id).padStart(2, "0")}</span> <span className="text-strong">{t.name}</span>{t.trader_id === nextId && <span className="ml-2 rounded border border-line px-1.5 py-0.5 text-xs text-accent">Next up</span>}</td>
                   <td className="px-3 py-1.5 text-muted">{t.strategy}</td>
                   <td className="px-3 py-1.5 text-right font-mono" title={`Cash ${dollars(t.cash)}, of which ${dollars(t.reserved_cash)} is reserved for open buy orders`}>{dollars(t.available_cash)}</td>
                   <td className="px-3 py-1.5 text-right font-mono text-muted" title={t.reserved_cash > 0 ? `${dollars(t.reserved_cash)} reserved for open buy orders. ${fmtReservedShares(t.reserved_shares)}` : `No cash reserved: no open buy orders. ${fmtReservedShares(t.reserved_shares)}`}>{t.reserved_cash > 0 ? dollars(t.reserved_cash) : DASH}</td>

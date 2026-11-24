@@ -14,10 +14,16 @@ class RoundRobin:
     def __init__(self, items: list) -> None:
         self._items = items
         self._next = 0
+        self.turns = 0  # how many times take() has been called
+
+    def peek(self):
+        """The item the next take() will return, without advancing."""
+        return self._items[self._next % len(self._items)]
 
     def take(self):
         item = self._items[self._next % len(self._items)]
         self._next += 1
+        self.turns += 1
         return item
 
 
