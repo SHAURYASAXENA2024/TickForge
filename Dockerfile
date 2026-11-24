@@ -1,38 +1,50 @@
+
+
 FROM ubuntu:24.04
 
-# Avoid prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install system dependencies
 RUN apt-get update && apt-get install -y \
-    python3 \
-    python3-venv \
-    python3-pip \
-    cmake \
-    g++ \
-    build-essential \
-    curl \
-    git \
+    python3 python3-dev python3-venv python3-pip \
+    cmake g++ build-essential curl git nginx pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Rust
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 ENV PATH="/root/.cargo/bin:${PATH}"
 
-# Install Node.js 20+ and npm
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y nodejs
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy project files
 COPY . /app
 
-# Expose Render default port or fallback
+RUN python3 -m venv /app/.venv
+
+RUN /app/.venv/bin/pip install --no-cache-dir maturin==1.16.0 \
+    -r /app/services/exchange-api/requirements.txt \
+    -r /app/services/market-data/requirements.txt
+
+RUN cd /app/storage && \
+    VIRTUAL_ENV=/app/.venv \
+    PATH="/app/.venv/bin:$PATH" \
+    maturin develop --release
+
+RUN cmake -S /app/engine -B /app/.run/build/engine \
+    -DCMAKE_BUILD_TYPE=Release && \
+    cmake --build /app/.run/build/engine -j2
+
+RUN cd /app/frontend && \
+    npm ci --no-audit --no-fund && \
+    npm run build
+
+RUN chmod +x /app/render-start.sh
+
+COPY nginx.conf /etc/nginx/sites-available/default
+
 ENV PORT=10000
+
 EXPOSE 10000
 
-# Start script
-RUN chmod +x build.sh
-
-CMD ["./build.sh"]
+CMD ["bash", "/app/render-start.sh"]
