@@ -1,0 +1,144 @@
+#pragma once
+// Order book for one symbol, built on std::map. This is the baseline book and
+// the one engine_server uses: it accepts any price.
+//
+// Book interface (MapBook and DenseBook both have it):
+//   bool add(Order, next_trade_id, trades)   match, then rest the remainder
+//   bool cancel(order_id)                    false if the order is not resting
+//   void levels(side, depth, out)            [price, total qty], best first
+//   void for_each(f)                         f(order_id, price, qty): bids best
+//                                            first, then asks best first
+#include "types.hpp"
+#include <deque>
+#include <functional>
+#include <map>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+class MapBook {
+public:
+  using Levels = std::vector<std::pair<int64_t, uint64_t>>;
+
+  bool add(Order in, uint64_t &next_trade_id, std::vector<Trade> &trades) {
+    if (in.side == Side::Buy)
+      take(asks_, in, next_trade_id, trades, [&](int64_t p) { return p <= in.price; });
+    else
+      take(bids_, in, next_trade_id, trades, [&](int64_t p) { return p >= in.price; });
+
+    if (in.qty > 0) {
+      if (in.side == Side::Buy) bids_[in.price].push_back(in);
+      else asks_[in.price].push_back(in);
+      where_[in.order_id] = {in.price, in.side};
+    }
+    return true;
+  }
+
+  bool cancel(uint64_t order_id) {
+    auto it = where_.find(order_id);
+    if (it == where_.end()) return false;
+    auto [price, side] = it->second;
+    if (side == Side::Buy) erase_from(bids_, price, order_id);
+    else erase_from(asks_, price, order_id);
+    where_.erase(it);
+    return true;
+  }
+
+  bool has(uint64_t order_id) const { return where_.count(order_id) != 0; }
+
+  // Lower the remaining quantity of a resting order in place. The order keeps its place in the
+  // queue. Returns the old quantity, or 0 if the order is not resting or `new_qty` is not
+  // between 1 and the old quantity minus 1.
+  uint32_t reduce(uint64_t order_id, uint32_t new_qty) {
+    auto it = where_.find(order_id);
+    if (it == where_.end() || new_qty == 0) return 0;
+    auto [price, side] = it->second;
+    Queue &q = side == Side::Buy ? bids_.find(price)->second : asks_.find(price)->second;
+    for (Order &o : q) {
+      if (o.order_id != order_id) continue;
+      if (new_qty >= o.qty) return 0;
+      const uint32_t old = o.qty;
+      o.qty = new_qty;
+      return old;
+    }
+    return 0;
+  }
+
+  void levels(Side side, size_t depth, Levels &out) const {
+    if (side == Side::Buy) collect(bids_, depth, out);
+    else collect(asks_, depth, out);
+  }
+
+  template <class F> void for_each(F f) const {
+    for (const auto &[price, q] : bids_)
+      for (const Order &o : q) f(o.order_id, price, o.qty);
+    for (const auto &[price, q] : asks_)
+      for (const Order &o : q) f(o.order_id, price, o.qty);
+  }
+
+private:
+  using Queue = std::deque<Order>;
+
+  // Match `in` against one side of the book while the prices cross. An order with an
+  // owner never trades with that owner's own resting orders: they are skipped and the
+  // next order in price-time order is used instead.
+  template <class Map, class Crosses>
+  void take(Map &side, Order &in, uint64_t &next_trade_id, std::vector<Trade> &trades,
+            Crosses crosses) {
+    const bool skip_own = in.stp && in.trader != 0;
+    for (auto level = side.begin(); in.qty > 0 && level != side.end();) {
+      if (!crosses(level->first)) break;
+      Queue &q = level->second;
+      if (!skip_own) {
+        while (in.qty > 0 && !q.empty()) {
+          trades.push_back(fill(next_trade_id++, in, q.front()));
+          if (q.front().qty == 0) {
+            where_.erase(q.front().order_id);
+            q.pop_front();
+          }
+        }
+      } else {
+        for (auto it = q.begin(); it != q.end() && in.qty > 0;) {
+          if (it->trader == in.trader) {
+            ++it;
+            continue;
+          }
+          trades.push_back(fill(next_trade_id++, in, *it));
+          if (it->qty == 0) {
+            where_.erase(it->order_id);
+            it = q.erase(it);
+          } else {
+            ++it;
+          }
+        }
+      }
+      if (q.empty()) level = side.erase(level);
+      else ++level;
+    }
+  }
+
+  template <class Map> static void erase_from(Map &side, int64_t price, uint64_t order_id) {
+    auto level = side.find(price);
+    Queue &q = level->second;
+    for (auto it = q.begin(); it != q.end(); ++it) {
+      if (it->order_id == order_id) {
+        q.erase(it);
+        break;
+      }
+    }
+    if (q.empty()) side.erase(level);
+  }
+
+  template <class Map> static void collect(const Map &side, size_t depth, Levels &out) {
+    for (const auto &[price, q] : side) {
+      if (out.size() >= depth) break;
+      uint64_t total = 0;
+      for (const Order &o : q) total += o.qty;
+      out.emplace_back(price, total);
+    }
+  }
+
+  std::map<int64_t, Queue, std::greater<int64_t>> bids_; // highest price first
+  std::map<int64_t, Queue> asks_;                        // lowest price first
+  std::unordered_map<uint64_t, std::pair<int64_t, Side>> where_; // order_id -> price, side
+};

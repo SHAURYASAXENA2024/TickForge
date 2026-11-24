@@ -1,0 +1,175 @@
+// The "Exchange" section: the 24 virtual traders and the trades they made (cash and shares come from real fills).
+import { Notice, Panel } from "@/components/ui";
+import { DASH, dollars, fmtInt, fmtReservedShares, signedDollars } from "@/lib/format";
+import { useCallback, useEffect, useState } from "react";
+import { EXCHANGE_SYMBOLS, controlSymbol, controlTrader, getSymbolStates, type ControlAction, type DispatchInfo, type ControlState, type ExchangeHealth, type LiveTrade, type Trader } from "@/lib/exchangeApi";
+import { useDispatchInfo } from "./useExchange";
+import { buttonClass } from "@/components/ui";
+
+const STATE_TEXT: Record<ControlState, string> = { running: "Running", paused: "Paused", stopped: "Stopped" };
+const STATE_COLOR: Record<ControlState, string> = { running: "text-up", paused: "text-warn", stopped: "text-down" };
+
+function Controls({ state, onAct, label }: { state: ControlState; onAct: (a: ControlAction) => void; label: string }) {
+  return (
+    <span className="inline-flex gap-1">
+      {state === "running" ? (
+        <button type="button" className={buttonClass} aria-label={`Pause ${label}`} onClick={() => onAct("pause")}>Pause</button>
+      ) : (
+        <button type="button" className={buttonClass} aria-label={`Resume ${label}`} onClick={() => onAct("resume")}>Resume</button>
+      )}
+      {state !== "stopped" && <button type="button" className={buttonClass} aria-label={`Stop ${label}`} onClick={() => onAct("stop")}>Stop</button>}
+    </span>
+  );
+}
+
+/** One chip per symbol. Pausing a symbol blocks new orders for it; stopping also cancels its resting orders. */
+function SymbolControls({ online }: { online: boolean }) {
+  const [states, setStates] = useState<Record<string, ControlState>>({});
+  const load = useCallback(() => getSymbolStates().then((rows) => setStates(Object.fromEntries(rows.map((r) => [r.symbol, r.state])))).catch(() => undefined), []);
+  useEffect(() => {
+    void load();
+    const timer = window.setInterval(() => void load(), 3000);
+    return () => window.clearInterval(timer);
+  }, [load]);
+  const act = (symbol: string, action: ControlAction) => void controlSymbol(symbol, action).catch(() => undefined).then(load);
+  return (
+    <Panel title="Symbols" description="Pause, resume or stop one symbol while the others keep trading. A paused symbol takes no new orders (from anyone); stopping also cancels its resting orders.">
+      {!online ? (
+        <Notice title="Controls not available">exchange-api is not reachable.</Notice>
+      ) : (
+        <ul className="grid gap-2 p-4 sm:grid-cols-2 lg:grid-cols-5">
+          {EXCHANGE_SYMBOLS.map((s) => {
+            const state = states[s] ?? "running";
+            return (
+              <li key={s} className="flex flex-wrap items-center justify-between gap-2 rounded border border-line px-3 py-2">
+                <span><span className="font-mono text-strong">{s}</span> <span className={`text-xs ${STATE_COLOR[state]}`}>{STATE_TEXT[state]}</span></span>
+                <Controls state={state} label={s} onAct={(a) => act(s, a)} />
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </Panel>
+  );
+}
+
+type Props = { online: boolean; health: ExchangeHealth | null; traders: Trader[]; trades: LiveTrade[] };
+
+const timeOf = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+
+function dispatchLine(d: DispatchInfo | undefined, traders: Trader[]): string | null {
+  if (!d) return null;
+  if (d.mode !== "roundrobin") return "Dispatch: random";
+  const next = traders.find((t) => t.trader_id === d.next_trader_id);
+  return `Dispatch: round robin, turn ${d.turns}${next ? `, next up: ${next.name}` : ""}`;
+}
+
+function TradersPanel({ online, traders }: { online: boolean; traders: Trader[] }) {
+  const dispatch = useDispatchInfo();
+  const line = dispatchLine(dispatch, traders);
+  const nextId = dispatch?.mode === "roundrobin" ? dispatch.next_trader_id : null;
+  return (
+    <Panel
+      title="Virtual traders"
+      description="24 accounts that trade by simple rules. Cash, shares and profit change only when one of their orders is filled. An open buy order reserves its full cost and an open sell order reserves its shares, so available cash is cash minus what is reserved."
+    >
+      {traders.length === 0 ? (
+        <Notice title="No trader data">{online ? "Waiting for the first update." : "exchange-api is not reachable. Start the stack with ./build.sh."}</Notice>
+      ) : (
+        <div className="max-h-[28rem] overflow-auto">
+          {line && <p className="px-4 pt-2 text-xs text-muted" data-testid="dispatch-line">{line}</p>}
+          <table className="w-full min-w-[58rem] text-sm">
+            <thead className="sticky top-0 bg-surface text-xs text-muted">
+              <tr className="border-b border-line">
+                <th className="px-4 py-2 text-left font-medium">Trader</th>
+                <th className="px-3 py-2 text-left font-medium">Strategy</th>
+                <th className="px-3 py-2 text-right font-medium">Available cash</th>
+                <th className="px-3 py-2 text-right font-medium">Reserved</th>
+                <th className="px-3 py-2 text-right font-medium">Total value</th>
+                <th className="px-3 py-2 text-right font-medium">Realized profit</th>
+                <th className="px-3 py-2 text-right font-medium">Fills</th>
+                <th className="px-4 py-2 text-left font-medium">Last order</th>
+                <th className="px-3 py-2 text-left font-medium">Control</th>
+              </tr>
+            </thead>
+            <tbody>
+              {traders.map((t) => (
+                <tr key={t.trader_id} className="border-b border-line last:border-0 hover:bg-raised">
+                  <td className="px-4 py-1.5"><span className="font-mono text-faint">{String(t.trader_id).padStart(2, "0")}</span> <span className="text-strong">{t.name}</span>{t.trader_id === nextId && <span className="ml-2 rounded border border-line px-1.5 py-0.5 text-xs text-accent">Next up</span>}</td>
+                  <td className="px-3 py-1.5 text-muted">{t.strategy}</td>
+                  <td className="px-3 py-1.5 text-right font-mono" title={`Cash ${dollars(t.cash)}, of which ${dollars(t.reserved_cash)} is reserved for open buy orders`}>{dollars(t.available_cash)}</td>
+                  <td className="px-3 py-1.5 text-right font-mono text-muted" title={t.reserved_cash > 0 ? `${dollars(t.reserved_cash)} reserved for open buy orders. ${fmtReservedShares(t.reserved_shares)}` : `No cash reserved: no open buy orders. ${fmtReservedShares(t.reserved_shares)}`}>{t.reserved_cash > 0 ? dollars(t.reserved_cash) : DASH}</td>
+                  <td className="px-3 py-1.5 text-right font-mono">{dollars(t.equity)}</td>
+                  <td className={`px-3 py-1.5 text-right font-mono ${t.realized_pnl > 0 ? "text-up" : t.realized_pnl < 0 ? "text-down" : "text-muted"}`}>{signedDollars(t.realized_pnl)}</td>
+                  <td className="px-3 py-1.5 text-right font-mono">{t.trades}</td>
+                  <td className="max-w-48 truncate px-4 py-1.5 font-mono text-muted">{t.last_action || DASH}</td>
+                  <td className="px-3 py-1.5">
+                    <span className={`mr-2 text-xs ${STATE_COLOR[t.state ?? "running"]}`}>{STATE_TEXT[t.state ?? "running"]}</span>
+                    <Controls state={t.state ?? "running"} label={t.name} onAct={(a) => void controlTrader(t.trader_id, a).catch(() => undefined)} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Panel>
+  );
+}
+
+function TradeFeed({ online, trades, traders }: { online: boolean; trades: LiveTrade[]; traders: Trader[] }) {
+  const name = (id: number) => (id === 0 ? "Manual" : traders.find((t) => t.trader_id === id)?.name ?? `Trader ${id}`);
+  return (
+    <Panel title="Trades" description="Newest first. Every trade is also saved by the Rust database." action={<span className="font-mono text-xs text-muted">{trades.length} shown</span>}>
+      {trades.length === 0 ? (
+        <Notice title="No trades yet">{online ? "Press Start so the virtual traders send orders." : "exchange-api is not reachable."}</Notice>
+      ) : (
+        <div className="max-h-[28rem] overflow-auto">
+          <table className="w-full min-w-[34rem] text-sm">
+            <thead className="sticky top-0 bg-surface text-xs text-muted">
+              <tr className="border-b border-line">
+                <th className="px-4 py-2 text-left font-medium">Trade</th>
+                <th className="px-3 py-2 text-left font-medium">Symbol</th>
+                <th className="px-3 py-2 text-right font-medium">Price</th>
+                <th className="px-3 py-2 text-right font-medium">Shares</th>
+                <th className="px-3 py-2 text-left font-medium">Buyer</th>
+                <th className="px-3 py-2 text-left font-medium">Seller</th>
+                <th className="px-4 py-2 text-right font-medium">Time</th>
+              </tr>
+            </thead>
+            <tbody>
+              {trades.slice(0, 100).map((t) => (
+                <tr key={t.trade_id} className="border-b border-line last:border-0 hover:bg-raised">
+                  <td className="px-4 py-1.5 font-mono text-faint">{t.trade_id}</td>
+                  <td className="px-3 py-1.5 font-mono text-strong">{t.symbol}</td>
+                  <td className="px-3 py-1.5 text-right font-mono">{dollars(t.price)}</td>
+                  <td className="px-3 py-1.5 text-right font-mono">{fmtInt(t.qty)}</td>
+                  <td className="px-3 py-1.5 text-muted">{name(t.buyer_id)}</td>
+                  <td className="px-3 py-1.5 text-muted">{name(t.seller_id)}</td>
+                  <td className="px-4 py-1.5 text-right font-mono text-faint">{timeOf(t.ts_ms)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Panel>
+  );
+}
+
+export function ExchangeSection({ online, health, traders, trades }: Props) {
+  return (
+    <section id="exchange" className="scroll-mt-20 space-y-4 py-8">
+      <div className="flex flex-wrap items-baseline justify-between gap-3">
+        <h2 className="text-xl font-semibold text-strong">Exchange</h2>
+        <p className="text-sm text-muted">
+          exchange-api {online ? "is reachable" : "is not reachable"}
+          {health && <> · engine {health.engine} · {fmtInt(health.trades)} trades saved</>}
+        </p>
+      </div>
+      <SymbolControls online={online} />
+      <TradersPanel online={online} traders={traders} />
+      <TradeFeed online={online} trades={trades} traders={traders} />
+    </section>
+  );
+}
